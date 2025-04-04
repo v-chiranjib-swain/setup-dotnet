@@ -1356,7 +1356,7 @@ get_download_link_from_aka_ms() {
     fi
     aka_ms_link="$aka_ms_link/$normalized_product-$normalized_os-$normalized_architecture.tar.gz"
      # Add print statement
-    say "Constructed aka.ms link: $aka_ms_link"
+    say "Constructed aka.ms link test: $aka_ms_link"
     say_verbose "Constructed aka.ms link: '$aka_ms_link'."
 
     #get HTTP response
