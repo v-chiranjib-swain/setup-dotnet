@@ -751,6 +751,9 @@ construct_download_link() {
         return 1
     fi
 
+    # Add print statement
+    say "Constructed download link: $download_link"
+
     echo "$download_link"
     return 0
 }
@@ -913,6 +916,9 @@ construct_legacy_download_link() {
     else
         return 1
     fi
+
+    # Add print statement
+    say "Constructed legacy download link: $legacy_download_link"
 
     echo "$legacy_download_link"
     return 0
@@ -1349,6 +1355,8 @@ get_download_link_from_aka_ms() {
         aka_ms_link="$aka_ms_link/$normalized_quality"
     fi
     aka_ms_link="$aka_ms_link/$normalized_product-$normalized_os-$normalized_architecture.tar.gz"
+     # Add print statement
+    say "Constructed aka.ms link: $aka_ms_link"
     say_verbose "Constructed aka.ms link: '$aka_ms_link'."
 
     #get HTTP response
