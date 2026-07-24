@@ -529,3 +529,41 @@ To always use the latest installed SDK regardless of version:
 | Need `--fx-version` set dynamically in a script | Shell query: `dotnet --list-runtimes \| sort -V \| tail -1` |
 | Repo-wide SDK pinning with flexibility | `global.json` with a `rollForward` policy |
 | Absolute latest of everything | `dotnet-version: 'latest'` in `setup-dotnet` |
+
+---
+
+### Practical gotcha: `latestPatch` and feature bands
+
+The `latestPatch` policy does **not** treat the version field as a simple floor. It uses it to identify which **feature band** to search within.
+
+.NET SDK versions follow the format `Major.Minor.FBpatch`:
+
+```
+10.0.302
+      ↑↑↑
+      │└┴─ patch within the band (02)
+      └─── feature band (3xx = 300–399)
+```
+
+| Version in `global.json` | Feature band targeted | Example match |
+|---|---|---|
+| `10.0.0` | `0xx` (000–099) | needs `10.0.001`–`10.0.099` |
+| `10.0.100` | `1xx` (100–199) | `10.0.110` ✅ |
+| `10.0.300` | `3xx` (300–399) | `10.0.302` ✅ |
+
+If the image has `10.0.110`, `10.0.204`, `10.0.302` installed and your `global.json` specifies `"version": "10.0.0"` with `"rollForward": "latestPatch"`, the muxer looks for a `10.0.0xx` SDK — finds none — and exits with **code 155**:
+
+```
+A compatible .NET SDK was not found.
+Requested SDK version: 10.0.0
+Install the [10.0.0] .NET SDK or update global.json to match an installed SDK.
+```
+
+**Fix:** set the version to match a feature band that is actually installed:
+
+```json
+{ "sdk": { "version": "10.0.300", "rollForward": "latestPatch" } }
+→ resolves to 10.0.302 ✅
+```
+
+This was confirmed in run [30086461924](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30086461924) — the first attempt with `10.0.0` failed on all three platforms; switching to `10.0.300` resolved to `10.0.302` cleanly.
