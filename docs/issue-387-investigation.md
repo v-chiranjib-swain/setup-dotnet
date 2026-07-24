@@ -13,6 +13,7 @@
 9. [Cross-Platform Verification](#9-cross-platform-verification)
 10. [Alternatives That Were Considered (and Why They Don't Work)](#10-alternatives-that-were-considered-and-why-they-dont-work)
 11. [Cumulative Answer](#11-cumulative-answer)
+12. [Selecting SDK and Runtime Dynamically Without Hardcoding](#12-selecting-sdk-and-runtime-dynamically-without-hardcoding)
 
 ---
 
@@ -350,3 +351,181 @@ v4 answer:       "We don't. Write it once from LTS. Skip it forever after."
 ## 11. Cumulative Answer
 
 > `setup-dotnet@v3` overwrote the `dotnet` muxer during every SDK install because the underlying install script was designed for a single extraction into a fresh directory — it bundled `dotnet` in every archive and extracted everything unconditionally. The action never passed `-SkipNonVersionedFiles` because it was originally intended to be called once. When used multiple times in a single job, it attempted to overwrite a shared binary that was already in use. This was unnecessary: the muxer is forward/backward compatible and only needs to be written once. On Windows, replacing an executable that is already open without the required sharing permissions results in a sharing violation, causing the installation to fail. On Linux and macOS, the filesystem allows the pathname to be replaced while running processes continue using the original file, so the overwrite succeeds without error. Alternative approaches — such as killing the process holding the file or installing each SDK into a separate directory — are impractical: the process holding the binary is often a system service that must not be terminated, and the muxer is explicitly designed to be shared across all SDKs in a single directory, making per-SDK isolation break `global.json` resolution and PATH management. v4 fixed this by always passing `-SkipNonVersionedFiles`, and adding a deliberate LTS runtime pre-install to ensure the muxer is always written once from the latest, most secure available version — after which every subsequent SDK install skips it entirely.
+
+---
+
+## 12. Selecting SDK and Runtime Dynamically Without Hardcoding
+
+### The question
+
+> *"How can I select which runtime to use (`--fx-version`) and which SDK without hardcoding values? Let's say the latest available ones on the image."*
+
+---
+
+### Background: what `--fx-version` is
+
+`--fx-version` is a flag passed to `dotnet exec` or `dotnet run` that tells the muxer which **runtime version** to load when running an application — overriding what the application's `.runtimeconfig.json` specifies.
+
+```bash
+dotnet exec --fx-version 9.0.4 myapp.dll
+# forces the app to run on runtime 9.0.4
+# even if myapp.dll targets a different version
+```
+
+It is useful when multiple runtimes are installed and you want to target a specific one without modifying the project.
+
+---
+
+### Querying what is installed on the runner
+
+Both commands work on all three platforms:
+
+```bash
+# List all installed SDKs
+dotnet --list-sdks
+# 8.0.100 [/usr/share/dotnet/sdk]
+# 9.0.203 [/usr/share/dotnet/sdk]
+# 10.0.301 [/usr/share/dotnet/sdk]
+
+# List all installed runtimes
+dotnet --list-runtimes
+# Microsoft.AspNetCore.App 9.0.4 [/usr/share/dotnet/shared/...]
+# Microsoft.NETCore.App 9.0.4   [/usr/share/dotnet/shared/...]
+# Microsoft.NETCore.App 10.0.10 [/usr/share/dotnet/shared/...]
+```
+
+---
+
+### Approach 1 — Wildcards in `setup-dotnet` (recommended)
+
+`setup-dotnet@v4` supports version patterns that resolve dynamically at workflow runtime:
+
+| Input | Meaning |
+|---|---|
+| `'x'` or `'*'` | Latest SDK of any major version |
+| `'10.0.x'` | Latest patch of 10.0 |
+| `'10.0.3xx'` | Latest 10.0.3xx feature band |
+| `'latest'` | Resolves via releases index API — latest non-EOL, non-preview |
+
+```yaml
+- uses: actions/setup-dotnet@v4
+  with:
+    dotnet-version: '10.0.x'    # latest 10.0 patch, no hardcoded patch number
+```
+
+These patterns are resolved by `DotnetVersionResolver.createDotnetVersion()` in `src/installer.ts`, which maps them to `--channel 10.0` on the install script rather than `--version 10.0.x`.
+
+---
+
+### Approach 2 — Skip `setup-dotnet` and use the image's preinstalled SDKs
+
+`ubuntu-latest`, `windows-latest`, and `macos-latest` all ship with multiple .NET SDKs preinstalled. If you just want the latest available with no extra download, skip the action entirely:
+
+```yaml
+- name: Use latest preinstalled SDK
+  run: dotnet --version    # prints the latest installed SDK
+```
+
+Without a `global.json`, `dotnet` always selects the **latest installed SDK** automatically. To see exactly what is preinstalled: [GitHub Actions runner-images software lists](https://github.com/actions/runner-images).
+
+---
+
+### Approach 3 — Query and capture at runtime (shell)
+
+**Linux / macOS (bash):**
+
+```bash
+# Latest installed SDK
+LATEST_SDK=$(dotnet --list-sdks | sort -V | tail -1 | awk '{print $1}')
+
+# Latest Microsoft.NETCore.App runtime
+LATEST_RT=$(dotnet --list-runtimes \
+  | grep "^Microsoft.NETCore.App" \
+  | sort -V \
+  | tail -1 \
+  | awk '{print $2}')
+
+dotnet exec --fx-version "$LATEST_RT" myapp.dll
+```
+
+**Windows (PowerShell):**
+
+```powershell
+# Latest installed SDK
+$latestSdk = (dotnet --list-sdks | Sort-Object | Select-Object -Last 1).Split(' ')[0]
+
+# Latest Microsoft.NETCore.App runtime
+$latestRt = (dotnet --list-runtimes |
+  Where-Object { $_ -match '^Microsoft\.NETCore\.App' } |
+  Sort-Object |
+  Select-Object -Last 1).Split(' ')[1]
+
+dotnet exec --fx-version $latestRt myapp.dll
+```
+
+**Expose as a step output for later steps:**
+
+```yaml
+- name: Capture latest runtime
+  id: dotnet-info
+  run: |
+    LATEST_RT=$(dotnet --list-runtimes \
+      | grep "^Microsoft.NETCore.App" \
+      | sort -V | tail -1 | awk '{print $2}')
+    echo "runtime=$LATEST_RT" >> $GITHUB_OUTPUT
+
+- name: Run app with latest runtime
+  run: dotnet exec --fx-version ${{ steps.dotnet-info.outputs.runtime }} myapp.dll
+```
+
+---
+
+### Approach 4 — `global.json` with `rollForward` policy
+
+For development and reproducible CI, `global.json` in the repo root controls SDK selection without hardcoding a full patch version:
+
+```json
+{
+  "sdk": {
+    "version": "9.0.0",
+    "rollForward": "latestMinor"
+  }
+}
+```
+
+`rollForward` policies:
+
+| Policy | Behaviour |
+|---|---|
+| `patch` | Latest patch of specified `major.minor.feature` |
+| `feature` | Latest feature band of specified `major.minor` |
+| `minor` | Latest minor ≥ specified version |
+| `major` | Latest major ≥ specified version |
+| `latestPatch` | Absolute latest patch of specified `major.minor` |
+| `latestFeature` | Absolute latest feature band of specified `major.minor` |
+| `latestMinor` | Absolute latest minor of specified major |
+| `latestMajor` | Absolute latest SDK installed — version field is a floor only |
+| `disable` | Exact match only — fails if exact version not installed |
+
+To always use the latest installed SDK regardless of version:
+
+```json
+{
+  "sdk": {
+    "version": "0.0.0",
+    "rollForward": "latestMajor"
+  }
+}
+```
+
+---
+
+### Which approach to use
+
+| Scenario | Recommended approach |
+|---|---|
+| Want a specific major/minor, always latest patch | `dotnet-version: '9.0.x'` in `setup-dotnet` |
+| Want whatever the image has, no extra download | Skip `setup-dotnet`; use preinstalled SDK directly |
+| Need `--fx-version` set dynamically in a script | Shell query: `dotnet --list-runtimes \| sort -V \| tail -1` |
+| Repo-wide SDK pinning with flexibility | `global.json` with a `rollForward` policy |
+| Absolute latest of everything | `dotnet-version: 'latest'` in `setup-dotnet` |
