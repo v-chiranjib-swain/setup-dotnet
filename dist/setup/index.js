@@ -45076,32 +45076,31 @@ class DotnetCoreInstaller {
             ]
             : [];
         /**
-         * Install dotnet runtime first in order to get
-         * the latest stable version of dotnet CLI.
-         * Skipped on Windows (issue #642): the LTS-channel pass installs a
-         * newer muxer (dotnet.exe) that can shadow the user-requested SDK's
-         * built-in muxer. On Windows the SDK installer already drops the
-         * correct muxer, so the pre-pass is unnecessary.
+         * Pass 1 (LTS runtime pre-pass) — skipped on all platforms (issue #642).
+         * On Windows: installing the latest active LTS runtime adds a newer
+         * host/fxr/<version>/hostfxr.dll entry, causing the muxer to load an
+         * unexpected hostfxr version and producing file-lock contention on dotnet.exe.
+         * On macOS/Linux: the SDK installer (Pass 2) already writes the muxer and
+         * hostfxr, so this pre-pass is redundant across all platforms.
+         *
+         * Original code preserved below for reference:
+         *
+         * const runtimeInstallOutput = await new DotnetInstallScript()
+         *   .useArchitecture(this.architecture)
+         *   .useArguments(
+         *     IS_WINDOWS ? '-SkipNonVersionedFiles' : '--skip-non-versioned-files'
+         *   )
+         *   .useArguments(IS_WINDOWS ? '-Runtime' : '--runtime', 'dotnet')
+         *   .useArguments(IS_WINDOWS ? '-Channel' : '--channel', 'LTS')
+         *   .useArguments(...architectureArguments)
+         *   .execute();
+         *
+         * if (runtimeInstallOutput.exitCode) {
+         *   core.warning(
+         *     `Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`
+         *   );
+         * }
          */
-        if (!utils_IS_WINDOWS) {
-            const runtimeInstallOutput = await new DotnetInstallScript()
-                .useArchitecture(this.architecture)
-                // If dotnet CLI is already installed - avoid overwriting it
-                .useArguments('--skip-non-versioned-files')
-                // Install only runtime + CLI
-                .useArguments('--runtime', 'dotnet')
-                // Use latest stable version
-                .useArguments('--channel', 'LTS')
-                .useArguments(...architectureArguments)
-                .execute();
-            if (runtimeInstallOutput.exitCode) {
-                /**
-                 * dotnetInstallScript will install CLI and runtime even if previous
-                 * script haven't succeded, so at this point it's too early to throw
-                 */
-                warning(`Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`);
-            }
-        }
         /**
          * Install dotnet over the latest version of
          * dotnet CLI
