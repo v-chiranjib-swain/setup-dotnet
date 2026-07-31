@@ -11,11 +11,12 @@
 3. [How dotnet.exe Picks the Right hostfxr.dll](#3-how-dotnetexe-picks-the-right-hostfxrdll)
 4. [What `dotnet --version` Actually Reports](#4-what-dotnet---version-actually-reports)
 5. [Runner Image Pre-installed State](#5-runner-image-pre-installed-state)
-6. [What Pass 1 (LTS Runtime Pre-pass) Does to the Muxer](#6-what-pass-1-lts-runtime-pre-pass-does-to-the-muxer)
-7. [How `-SkipNonVersionedFiles` Works](#7-how--skipnonversionedfiles-works)
-8. [Side-by-side: v4 (unpatched) vs issue_642 (patched)](#8-side-by-side-v4-unpatched-vs-issue_642-patched)
-9. [Verified Test Results from GitHub Actions Runs](#9-verified-test-results-from-github-actions-runs)
-10. [Summary: The Full Lifecycle](#10-summary-the-full-lifecycle)
+6. [Self-hosted Machine Investigation (macOS)](#6-self-hosted-machine-investigation-macos)
+7. [What Pass 1 (LTS Runtime Pre-pass) Does to the Muxer](#7-what-pass-1-lts-runtime-pre-pass-does-to-the-muxer)
+8. [How `-SkipNonVersionedFiles` Works](#8-how--skipnonversionedfiles-works)
+9. [Side-by-side: v4 (unpatched) vs issue_642 (patched)](#9-side-by-side-v4-unpatched-vs-issue_642-patched)
+10. [Verified Test Results from GitHub Actions Runs](#10-verified-test-results-from-github-actions-runs)
+11. [Summary: The Full Lifecycle](#11-summary-the-full-lifecycle)
 
 ---
 
@@ -127,7 +128,7 @@ dotnet --info output:
   Base Path:    C:\Program Files\dotnet\sdk\9.0.316\
 
 Host:
-  Version:      10.0.9        ← muxer binary version (from runner image)
+  Version:      10.0.9        ← loaded hostfxr.dll version (highest in host\fxr\, from runner image)
   Architecture: x64
   Commit:       901ca94124
 ```
@@ -136,6 +137,34 @@ Host:
 |---|---|
 | `.NET SDK: Version` | SDK selected by hostfxr via global.json resolution |
 | `Host: Version` | The `hostfxr.dll` binary version that was loaded |
+| `dotnet.exe` PE `ProductVersion` (Windows only) | The muxer binary's own build version — can be **older** than `Host: Version` |
+
+### Muxer binary version vs loaded hostfxr version
+
+The muxer binary's own version does **not** need to match the `Host: Version` it reports.
+Observed on a fresh `windows-latest` runner:
+
+```
+dotnet.exe  ProductVersion : 10.0.8    ← muxer binary version (Windows PE version resource)
+dotnet --info  Host: Version : 10.0.9   ← loaded hostfxr (highest in host\fxr\)
+```
+
+```
+dotnet.exe (ProductVersion 10.0.8)
+      │
+      ▼
+scans host\fxr\  →  finds 10.0.8\, 10.0.9\ (and older 8.x, 9.x)
+      │
+      ▼
+loads host\fxr\10.0.9\hostfxr.dll  (10.0.9 is highest)
+```
+
+### Identifying the muxer binary version per platform
+
+| Platform | How to read muxer binary version | Notes |
+|---|---|---|
+| Windows | PE version resource (`ProductVersion`, `FileVersion`, commit hash) | `(Get-Item dotnet.exe).VersionInfo.ProductVersion` |
+| Linux/macOS | No version embedded in Mach-O / ELF binary | SHA256 hash is the reliable way to detect muxer changes |
 
 ---
 
@@ -146,11 +175,12 @@ Before any `setup-dotnet` action runs, the runner already has:
 
 ```
 C:\Program Files\dotnet\
-├── dotnet.exe              ← Host v10.0.9  (pre-installed by runner image)
+├── dotnet.exe              ← muxer binary (ProductVersion: 10.0.8, pre-installed by runner image)
 ├── host\fxr\
 │   ├── 8.0.28\hostfxr.dll
 │   ├── 9.0.18\hostfxr.dll
-│   └── 10.0.9\hostfxr.dll  ← highest — selected by muxer
+│   ├── 10.0.8\hostfxr.dll
+│   └── 10.0.9\hostfxr.dll  ← highest — selected by muxer → Host: 10.0.9
 ├── sdk\
 │   ├── 8.0.128\, 8.0.206\, 8.0.319\, 8.0.422\
 │   ├── 9.0.118\, 9.0.205\, 9.0.315\
@@ -169,11 +199,98 @@ Host:
   Commit:       901ca94124
 ```
 
-The muxer binary (`dotnet.exe` Host `v10.0.9`) was **already present before any install step ran**.
+The muxer binary (`dotnet.exe`, `ProductVersion: 10.0.8`) was **already present before any install
+step ran**. It loaded `host\fxr\10.0.9\hostfxr.dll` as the highest available version, reporting
+`Host: 10.0.9` in `dotnet --info`.
 
 ---
 
-## 6. What Pass 1 (LTS Runtime Pre-pass) Does to the Muxer
+## 6. Self-hosted Machine Investigation (macOS)
+
+To confirm installer behavior independently of the runner image's pre-installed state, the
+investigation was repeated on a personal macOS machine where all file operations were directly
+observable.
+
+### Initial system state
+
+```
+/usr/local/share/dotnet/
+├── dotnet                    ← system muxer  (SHA256: 6f00aa40903edb...)
+├── host/fxr/
+│   └── 9.0.3/libhostfxr.dylib
+└── sdk/
+    └── 9.0.202/
+
+dotnet --info  Host:  9.0.3
+```
+
+### First `setup-dotnet` run (`dotnet-version: 9.0.x`)
+
+`setup-dotnet` does **not** modify the existing system installation at `/usr/local/share/dotnet/`.
+Instead, it creates a private installation directory and updates the shell environment:
+
+```
+DOTNET_ROOT → /Users/chiranjib/.dotnet
+PATH        → /Users/chiranjib/.dotnet prepended
+```
+
+The active `dotnet` binary changed:
+
+```
+Before:  /usr/local/share/dotnet/dotnet
+After:   /Users/chiranjib/.dotnet/dotnet
+```
+
+SHA256 of the muxer binary:
+
+```
+Before (system muxer):  6f00aa40903edb...
+After first run:        7118e57d820...    ← new muxer binary written to ~/.dotnet by Pass 1
+```
+
+Although only `9.0.x` was requested, Pass 1 installed the latest active LTS runtime, resulting in:
+
+```
+~/.dotnet/host/fxr/
+├── 9.0.18/libhostfxr.dylib
+├── 10.0.0/libhostfxr.dylib
+└── 10.0.10/libhostfxr.dylib   ← highest → Host: 10.0.10
+
+dotnet --info  Host:  10.0.10
+```
+
+### Second `setup-dotnet` run (`dotnet-version: 10.0.x`)
+
+```
+Muxer SHA256 before:  7118e57d820...
+Muxer SHA256 after:   7118e57d820...   ← identical — muxer NOT overwritten
+```
+
+```
+host/fxr/  before:  9.0.18, 10.0.0, 10.0.10
+host/fxr/  after:   9.0.18, 10.0.0, 10.0.10   ← unchanged
+```
+
+```
+sdk/ added:  10.0.302   ← only new versioned component added
+```
+
+`Host: Version` remained `10.0.10`.
+
+### Key findings from self-hosted investigation
+
+| Finding | Evidence |
+|---|---|
+| Action installs to `~/.dotnet`, not system path | `DOTNET_ROOT=/Users/chiranjib/.dotnet` set by action |
+| System installation (`/usr/local/share/dotnet/`) untouched | No changes after action runs |
+| First install creates a new muxer | SHA256 changed: `6f00aa40903...` → `7118e57d820...` |
+| Subsequent installs **do not overwrite** the muxer | SHA256 unchanged before and after second run |
+| Only versioned components added on subsequent installs | Only `sdk/10.0.302/` was new; `host/fxr/` and muxer unchanged |
+| `-SkipNonVersionedFiles` working as designed | SHA256 identity confirms non-versioned muxer preserved on re-install |
+
+---
+
+## 7. What Pass 1 (LTS Runtime Pre-pass) Does to the Muxer
 
 In the **unpatched `v4`** of `setup-dotnet`, `installDotnet()` runs two passes on all platforms:
 
@@ -193,8 +310,9 @@ After Pass 1:
 host\fxr\
 ├── 8.0.28\hostfxr.dll
 ├── 9.0.18\hostfxr.dll
-├── 10.0.9\hostfxr.dll   ← from runner image
-└── 10.0.10\hostfxr.dll  ← NEW — added by Pass 1
+├── 10.0.8\hostfxr.dll   ← from runner image
+├── 10.0.9\hostfxr.dll   ← from runner image (highest before Pass 1)
+└── 10.0.10\hostfxr.dll  ← NEW — added by Pass 1, becomes new highest
 ```
 
 `dotnet.exe` now loads `10.0.10\hostfxr.dll` (highest version). **The active hostfxr changed.**
@@ -220,7 +338,7 @@ install-dotnet.ps1 -SkipNonVersionedFiles -Channel 9.0
 
 ---
 
-## 7. How `-SkipNonVersionedFiles` Works
+## 8. How `-SkipNonVersionedFiles` Works
 
 The install script classifies every file in the archive by this regex:
 
@@ -242,15 +360,24 @@ Files whose path **does not match** → **non-versioned** → skipped if `-SkipN
 
 **This is why Pass 1 adds `host\fxr\10.0.10\` even with `-SkipNonVersionedFiles`** — the
 `hostfxr.dll` lives inside a versioned directory, so it is never skipped.
+### SHA256 evidence from self-hosted investigation (§ 6)
 
+Direct SHA256 measurement confirms the muxer binary is preserved on subsequent installs:
+
+| Install | `~/.dotnet/dotnet` SHA256 | Notes |
+|---|---|---|
+| After first `setup-dotnet` run (`9.0.x`) | `7118e57d820...` | New muxer created (Pass 1 wrote it) |
+| After second `setup-dotnet` run (`10.0.x`) | `7118e57d820...` | Identical — non-versioned file not overwritten |
+
+Only versioned components (`sdk/10.0.302/`) were added on the second run.
 ---
 
-## 8. Side-by-side: v4 (unpatched) vs issue_642 (patched)
+## 9. Side-by-side: v4 (unpatched) vs issue_642 (patched)
 
 ### v4 — Windows (unpatched)
 
 ```
-Runner boots → dotnet.exe (Host 10.0.9), host\fxr: [8.0.28, 9.0.18, 10.0.9]
+Runner boots → dotnet.exe (ProductVersion: 10.0.8, Host: 10.0.9), host\fxr: [8.0.28, 9.0.18, 10.0.8, 10.0.9]
 
 Pass 1: -Runtime dotnet -Channel LTS
     → Downloads runtime 10.0.10 (~37 MB)
@@ -270,7 +397,7 @@ Final Host: 10.0.10  |  Active SDK: 9.0.316
 ### issue_642 — Windows (patched — Pass 1 skipped)
 
 ```
-Runner boots → dotnet.exe (Host 10.0.9), host\fxr: [8.0.28, 9.0.18, 10.0.9]
+Runner boots → dotnet.exe (ProductVersion: 10.0.8, Host: 10.0.9), host\fxr: [8.0.28, 9.0.18, 10.0.8, 10.0.9]
 
 [Pass 1 skipped entirely on Windows]
 
@@ -288,7 +415,7 @@ Final Host: 10.0.9  |  Active SDK: 9.0.316
 | | v4 (unpatched) | issue_642 (patched) |
 |---|---|---|
 | Extra download (Pass 1) | ~37 MB runtime zip | None |
-| `host\fxr` after install | 8.0.28, 9.0.18, 10.0.9, **10.0.10** | 8.0.28, 9.0.18, 10.0.9 |
+| `host\fxr` after install | 8.0.28, 9.0.18, 10.0.8, 10.0.9, **10.0.10** | 8.0.28, 9.0.18, 10.0.8, 10.0.9 |
 | Active `hostfxr.dll` | **10.0.10** (upgraded by Pass 1) | **10.0.9** (runner image) |
 | `dotnet.exe` binary | Unchanged (skipped) | Unchanged (skipped) |
 | Active SDK | 9.0.316 | 9.0.316 |
@@ -299,7 +426,7 @@ avoids the `hostfxr.dll` upgrade side-effect on Windows.
 
 ---
 
-## 9. Verified Test Results from GitHub Actions Runs
+## 10. Verified Test Results from GitHub Actions Runs
 
 All results from repo: `chiranjib-swain/test-setup-dotnet`
 
@@ -321,18 +448,19 @@ All results from repo: `chiranjib-swain/test-setup-dotnet`
 
 ---
 
-## 10. Summary: The Full Lifecycle
+## 11. Summary: The Full Lifecycle
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    windows-latest runner boots                       │
 │                                                                     │
 │  C:\Program Files\dotnet\                                           │
-│  ├── dotnet.exe          ← Host binary (non-versioned)              │
+│  ├── dotnet.exe          ← muxer binary (ProductVersion: 10.0.8)    │
 │  ├── host\fxr\                                                      │
 │  │   ├── 8.0.28\hostfxr.dll   ┐                                     │
-│  │   ├── 9.0.18\hostfxr.dll   ├─ pre-installed by runner image     │
-│  │   └── 10.0.9\hostfxr.dll   ┘  ← highest → selected by muxer    │
+│  │   ├── 9.0.18\hostfxr.dll   │                                     │
+│  │   ├── 10.0.8\hostfxr.dll   ├─ pre-installed by runner image     │
+│  │   └── 10.0.9\hostfxr.dll   ┘  ← highest → Host: 10.0.9         │
 │  └── sdk\  8.0.x, 9.0.x, 10.0.x  ← pre-installed                  │
 └─────────────────────────────────────────────────────────────────────┘
                           │
