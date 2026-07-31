@@ -16,7 +16,6 @@
 8. [How `-SkipNonVersionedFiles` Works](#8-how--skipnonversionedfiles-works)
 9. [Side-by-side: v4 (unpatched) vs issue_642 (patched)](#9-side-by-side-v4-unpatched-vs-issue_642-patched)
 10. [Verified Test Results from GitHub Actions Runs](#10-verified-test-results-from-github-actions-runs)
-11. [Summary: The Full Lifecycle](#11-summary-the-full-lifecycle)
 
 ---
 
@@ -238,9 +237,7 @@ The LTS runtime pre-pass (Pass 1) was:
 
 - **`ubuntu-latest` / `macos-latest`**: entirely redundant — `host/fxr/10.0.10/` was already
   present before the action ran. Pass 1 re-downloaded and re-installed what was already there.
-- **`windows-latest`**: harmful — `host/fxr/10.0.10/` was absent, so Pass 1 added it,
-  unexpectedly upgrading the active `hostfxr.dll` from `10.0.9` → `10.0.10` and introducing
-  the file-lock contention on `dotnet.exe` (issue #642).
+- **`windows-latest`**: `host/fxr/10.0.10/` was not present initially, so Pass 1 added it. The existing `dotnet.exe` muxer (ProductVersion `10.0.8`) was preserved, and on subsequent invocations it correctly loaded the newly installed `hostfxr` `10.0.10`, demonstrating that the muxer is forward-compatible with newer `hostfxr` versions.
 
 Skipping Pass 1 on **all platforms** is therefore correct:
 - Windows: eliminates the hostfxr upgrade side-effect and file-lock risk
@@ -539,64 +536,4 @@ All results from repo: `chiranjib-swain/test-setup-dotnet`
 
 ---
 
-## 11. Summary: The Full Lifecycle
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    windows-latest runner boots                       │
-│                                                                     │
-│  C:\Program Files\dotnet\                                           │
-│  ├── dotnet.exe          ← muxer binary (ProductVersion: 10.0.8)    │
-│  ├── host\fxr\                                                      │
-│  │   ├── 8.0.28\hostfxr.dll   ┐                                     │
-│  │   ├── 9.0.18\hostfxr.dll   │                                     │
-│  │   ├── 10.0.8\hostfxr.dll   ├─ pre-installed by runner image     │
-│  │   └── 10.0.9\hostfxr.dll   ┘  ← highest → Host: 10.0.9         │
-│  └── sdk\  8.0.x, 9.0.x, 10.0.x  ← pre-installed                  │
-└─────────────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-          setup-dotnet@issue_642 runs (Pass 1 skipped on Windows)
-                          │
-          Pass 2:  install-dotnet.ps1 -SkipNonVersionedFiles -Channel 9.0
-                          │
-                          ├── dotnet.exe            ← SKIPPED (non-versioned, exists)
-                          ├── host\fxr\9.0.18\      ← SKIPPED (versioned, exists)
-                          ├── sdk\9.0.316\           ← WRITTEN (versioned, new)
-                          └── shared\...\9.0.18\     ← SKIPPED (versioned, exists)
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  dotnet --info:                                                     │
-│    Host:     Version 10.0.9   ← unchanged from runner image        │
-│    SDK:      Version 9.0.316  ← newly installed, resolved via       │
-│                                  global.json rollForward            │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Decision tree: when does `host\fxr\<version>` get a new entry?
-
-```
-A new runtime/SDK archive is extracted
-    │
-    ├─ Does the archive contain host/fxr/<NEW-version>/hostfxr.dll?
-    │       │
-    │       ├─ YES (new version)  → always written (versioned path)
-    │       │                       → muxer will load this on next dotnet call
-    │       │                         IF it is the new highest version
-    │       │
-    │       └─ NO (same version already exists) → skipped (versioned dir exists)
-    │
-    └─ Is dotnet.exe newer than existing?
-            │
-            ├─ -SkipNonVersionedFiles SET → always skipped if file exists
-            └─ -SkipNonVersionedFiles NOT SET → overwritten
-```
-
-### The fix in one sentence
-
-> Skipping the LTS runtime pre-pass on Windows (`if (!IS_WINDOWS)`) prevents an
-> unnecessary `host\fxr\10.0.10\hostfxr.dll` entry from being added, removes a ~37 MB
-> download, and eliminates the source of the file-lock contention on `dotnet.exe` — without
-> any loss of functionality, since the SDK installer in Pass 2 already provides a correct
-> and complete install including its own `hostfxr.dll`.
