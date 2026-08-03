@@ -175,19 +175,26 @@ action ran.
 
 ### `windows-latest`
 
+> **Runner image updated ~2026-07-28** (release `win25/20260728.188`): the image now ships
+> `Microsoft.NETCore.App 10.0.10`, `Microsoft.AspNetCore.App 10.0.10`, and
+> `Microsoft.WindowsDesktop.App 10.0.10` preinstalled, alongside `host\fxr\10.0.10\`.
+> Older entries (`10.0.9`, `9.0.17`, `8.0.28`) were replaced by their latest patch equivalents.
+> See runner-images releases: `github.com/actions/runner-images/releases`
+
 ```
 C:\Program Files\dotnet\
-├── dotnet.exe              ← muxer binary (167K, ProductVersion: 10.0.8, SHA256: CBB1746F...)
+├── dotnet.exe              ← muxer binary
 ├── host\fxr\
-│   ├── 8.0.6\, 8.0.22\, 8.0.28\
-│   ├── 9.0.6\, 9.0.17\
+│   ├── 8.0.22\
 │   ├── 10.0.8\
-│   └── 10.0.9\  ← highest → Host: 10.0.9     ❌ LTS 10.0.10 NOT present
-├── sdk\  8.0.128, 8.0.206, 8.0.319, 8.0.422, 9.0.118, 9.0.205, 9.0.315, 10.0.109, 10.0.204, 10.0.301
-└── shared\  NETCore + AspNetCore + WindowsDesktop: 8.0.6, 8.0.22, 8.0.28, 9.0.6, 9.0.17, 10.0.8, 10.0.9
+│   └── 10.0.10\  ← highest → Host: 10.0.10   ✅ LTS NOW present (image updated)
+├── sdk\  8.0.129, 8.0.206, 8.0.319, 8.0.423, 9.0.119, 9.0.205, 9.0.316, 10.0.110, 10.0.204, 10.0.302
+└── shared\  NETCore + AspNetCore + WindowsDesktop: 8.0.6, 8.0.22, 8.0.29, 9.0.6, 9.0.18, 10.0.8, 10.0.10
 ```
 
-`dotnet --info  Host: 10.0.9`  (muxer `ProductVersion: 10.0.8` — see § 4)
+`dotnet --version  10.0.302`  (highest SDK),  `dotnet --info  Host: 10.0.10`
+
+Confirmed from [run 30785651154](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30785651154) (arch-multiversion-test.yml, `windows-latest` job, BEFORE step, 2026-08-03).
 
 ### `ubuntu-latest`
 
@@ -225,23 +232,42 @@ C:\Program Files\dotnet\
 
 ### Cross-platform summary
 
-| Runner | Install root | Muxer size | Initial highest `host/fxr/` | `Host: Version` | LTS 10.0.10 pre-installed? |
-|---|---|---|---|---|---|
-| `windows-latest` | `C:\Program Files\dotnet\` | 167 KB | `10.0.9` | `10.0.9` | ❌ No |
-| `ubuntu-latest` | `/usr/share/dotnet/` | 67 KB | `10.0.10` | `10.0.10` | ✅ Yes |
-| `macos-latest` | `/Users/runner/.dotnet/` | 138 KB | `10.0.10` | `10.0.10` | ✅ Yes |
+#### As of runner image update ~2026-07-28 (all platforms now ship LTS 10.0.10)
+
+| Runner | Install root | Initial highest `host/fxr/` | `Host: Version` | LTS 10.0.10 pre-installed? |
+|---|---|---|---|---|
+| `windows-latest` | `C:\Program Files\dotnet\` | `10.0.10` | `10.0.10` | ✅ Yes (updated) |
+| `windows-11-arm` | `C:\Program Files\dotnet\` | `10.0.10` | `10.0.10` | ✅ Yes |
+| `ubuntu-latest` | `/usr/share/dotnet/` | `10.0.10` | `10.0.10` | ✅ Yes |
+| `ubuntu-24.04-arm` | `/usr/share/dotnet/` | `10.0.10` | `10.0.10` | ✅ Yes |
+| `macos-15-intel` | `/Users/runner/.dotnet/` | `10.0.10` | `10.0.10` | ✅ Yes |
+| `macos-latest` (arm64) | `/Users/runner/.dotnet/` | `10.0.10` | `10.0.10` | ✅ Yes |
+
+#### Previously (before runner image update — observed in earlier investigation)
+
+| Runner | Initial highest `host/fxr/` | LTS 10.0.10 pre-installed? |
+|---|---|---|
+| `windows-latest` | `10.0.9` | ❌ No |
+| `ubuntu-latest` | `10.0.10` | ✅ Yes |
+| `macos-latest` | `10.0.10` | ✅ Yes |
 
 ### Implication for Pass 1
 
-The LTS runtime pre-pass (Pass 1) was:
+The LTS runtime pre-pass (Pass 1) is **redundant on all GitHub-hosted runners**:
 
-- **`ubuntu-latest` / `macos-latest`**: entirely redundant — `host/fxr/10.0.10/` was already
-  present before the action ran. Pass 1 re-downloaded and re-installed what was already there.
-- **`windows-latest`**: `host/fxr/10.0.10/` was not present initially, so Pass 1 added it. The existing `dotnet.exe` muxer (ProductVersion `10.0.8`) was preserved, and on subsequent invocations it correctly loaded the newly installed `hostfxr` `10.0.10`, demonstrating that the muxer is forward-compatible with newer `hostfxr` versions.
+- **`ubuntu-latest` / `macos-latest`**: always redundant — `host/fxr/10.0.10/` was already
+  present before the action ran even before the image update.
+- **`windows-latest` (after ~2026-07-28 image update)**: the runner image now ships
+  `host\fxr\10.0.10\` preinstalled. Pass 1 in `actions/setup-dotnet@v4` downloads
+  ~37 MB of runtime zip and performs a full install — but since `10.0.10` is already present,
+  every file it would write either already exists (non-versioned → skipped by
+  `-SkipNonVersionedFiles`) or is identical (versioned runtime entries). **Pass 1 is a
+  complete no-op**. Verified empirically: `host\fxr\` is identical BEFORE and AFTER Pass 1
+  on [run 30785651154](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30785651154) (2026-08-03).
 
 Skipping Pass 1 on **all platforms** is therefore correct:
-- Windows: eliminates the hostfxr upgrade side-effect and file-lock risk
-- Ubuntu / macOS: eliminates a redundant download (the LTS runtime is already there)
+- Windows: eliminates a ~37 MB redundant download; removes the hostfxr upgrade side-effect and file-lock risk entirely
+- Ubuntu / macOS: eliminates a redundant download (the LTS runtime was already there before the image update too)
 
 ---
 
@@ -405,7 +431,7 @@ host\fxr\
 
 `dotnet.exe` now loads `10.0.10\hostfxr.dll` (highest version). **The active hostfxr changed.**
 
-Confirmed from live runner log (job `90809130877`, run `30523527111`):
+Confirmed from live runner log (job `90809130877`, [run 30523527111](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30523527111)):
 ```
 Pass 1:  install-dotnet.ps1 -SkipNonVersionedFiles -Runtime dotnet -Channel LTS
          → dotnet-install: Installed version is 10.0.10
@@ -518,21 +544,83 @@ avoids the `hostfxr.dll` upgrade side-effect on Windows.
 
 All results from repo: `chiranjib-swain/test-setup-dotnet`
 
-### Run #4 — issue_642 patch, all 3 jobs ✅ (run `30521410168`)
+### Run #4 — issue_642 patch, all 3 jobs ✅ ([run 30521410168](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30521410168))
 
 | Job | Runner | What action downloaded | Host after install | Active SDK |
 |---|---|---|---|---|
-| Windows single (9.0.x) | Fresh VM | SDK 9.0.316 (298 MB) — real download | **10.0.9** (runner image) | 9.0.316 |
-| Windows multi (8.0.x + 9.0.x) | Fresh VM | SDK 8.0.423 (285 MB) + SDK 9.0.316 (298 MB) | **10.0.9** (runner image) | 9.0.316 |
+| Windows single (9.0.x) | Fresh VM | SDK 9.0.316 (298 MB) — real download | **10.0.9** (runner image at the time) | 9.0.316 |
+| Windows multi (8.0.x + 9.0.x) | Fresh VM | SDK 8.0.423 (285 MB) + SDK 9.0.316 (298 MB) | **10.0.9** (runner image at the time) | 9.0.316 |
 | Ubuntu multi baseline | Fresh VM | Already installed — no-op | N/A | 9.0.316 |
 
-### Run — v4 official (run `30523527111`, job `90809130877`)
+### Run — v4 official ([run 30523527111](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30523527111), job `90809130877`) — pre-image-update
 
 | Pass | Command | Downloaded | Effect on host\fxr |
 |---|---|---|---|
 | Pass 1 | `-Runtime dotnet -Channel LTS` | runtime 10.0.10 (37 MB) | Added `host\fxr\10.0.10\` |
 | Pass 2 | `-Channel 9.0` | SDK 9.0.316 (298 MB) | No new fxr entry |
-| **Final Host** | | | **10.0.10** (upgraded) |
+| **Final Host** | | | **10.0.10** (upgraded from 10.0.9) |
+
+---
+
+### Run — v4 official, 6 runners ✅ — post-image-update ([run 30785651154](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30785651154), 2026-08-03)
+
+Workflow: `arch-multiversion-test.yml`, installs `8.0.x + 9.0.x` via `actions/setup-dotnet@v4`.
+All 6 jobs passed.
+
+**Key finding:** `host\fxr\` on `windows-latest` is **identical BEFORE and AFTER** Pass 1 —
+confirming Pass 1 is a complete no-op after the runner image update.
+
+| Runner | host/fxr BEFORE setup-dotnet | host/fxr AFTER setup-dotnet | Pass 1 effect |
+|---|---|---|---|
+| `windows-latest` | `10.0.10, 10.0.8, 8.0.22` | `10.0.10, 10.0.8, 8.0.22` | **no-op** — 10.0.10 was already there |
+| `windows-11-arm` | `10.0.10, ...` | `10.0.10, ...` | no-op |
+| `ubuntu-latest` | `10.0.10, 10.0.8, 9.0.18, ...` | `10.0.10, 10.0.8, 9.0.18, ...` | no-op (was always redundant) |
+| `ubuntu-24.04-arm` | `10.0.10, ...` | `10.0.10, ...` | no-op |
+| `macos-15-intel` | `10.0.10, ...` | `10.0.10, ...` | no-op |
+| `macos-latest` | `10.0.10, ...` | `10.0.10, ...` | no-op (was always redundant) |
+
+**`DOTNET_ROOT` after setup-dotnet on `windows-latest`:** `C:\Program Files\dotnet`
+
+---
+
+### Run — issue_642 branch (no Pass 1), 6 runners ✅ — post-image-update ([run 30786052855](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30786052855), 2026-08-03)
+
+Workflow: `issue-642-no-pass1-test.yml`, installs `8.0.x + 9.0.x` via `chiranjib-swain/setup-dotnet@issue_642`.
+All 6 jobs passed.
+
+Branch change: `installDotnet()` in `src/installer.ts` — Pass 1 block commented out entirely
+(commit `40df988`, `chiranjib-swain/setup-dotnet`).
+
+**`windows-latest` BEFORE vs AFTER (issue_642 — Pass 2 only):**
+
+```
+BEFORE:
+  dotnet --version : 10.0.302
+  SDKs  : 8.0.129, 8.0.206, 8.0.319, 8.0.423, 9.0.119, 9.0.205, 9.0.316,
+          10.0.110, 10.0.204, 10.0.302   ← all preinstalled by runner image
+  host/fxr: 10.0.10, 10.0.8, 8.0.22    ← LTS already present
+
+AFTER (no Pass 1, only Pass 2 for 8.0.x + 9.0.x):
+  dotnet --version : 10.0.302            ← unchanged
+  SDKs  : identical to BEFORE            ← already present, no new download
+  host/fxr: 10.0.10, 10.0.8, 8.0.29,
+            9.0.18, 9.0.6, 8.0.22       ← new 8.0.29 and 9.0.18 entries added
+            by SDK installers
+  DOTNET_ROOT = C:\Program Files\dotnet
+```
+
+| | `actions/setup-dotnet@v4` ([run 30785651154](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30785651154)) | `issue_642` ([run 30786052855](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30786052855)) |
+|---|---|---|
+| Pass 1 executed | Yes (but no-op — LTS already present) | No (skipped) |
+| Extra download | ~37 MB runtime zip (wasted) | None |
+| host/fxr AFTER | `10.0.10, 10.0.8, 8.0.22` (unchanged) | `10.0.10, 10.0.8, 8.0.29, 9.0.18, ...` |
+| All 6 runners passed | ✅ | ✅ |
+| Functional difference | None | None |
+
+**Runner-image release evidence:** `actions/runner-images` release `win25/20260728.188` (2026-07-28)
+shows `.NET Core Tools Added: Microsoft.NETCore.App 8.0.29, 9.0.18, 10.0.10` and
+`Deleted: Microsoft.NETCore.App 8.0.28, 9.0.17, 10.0.9` — this is the update that brought
+`host\fxr\10.0.10\` to the Windows image, making Pass 1 redundant on Windows too.
 
 ---
 
