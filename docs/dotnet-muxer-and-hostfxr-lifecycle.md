@@ -624,4 +624,176 @@ shows `.NET Core Tools Added: Microsoft.NETCore.App 8.0.29, 9.0.18, 10.0.10` and
 
 ---
 
+### Run — Ubuntu container clean-slate test, both jobs ✅ ([run 30894061687](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30894061687), 2026-08-04)
+
+Workflow: `container-ubuntu-test.yml`.
+Runner: `ubuntu-latest` (host). Container: `ubuntu:24.04` (job environment — **zero .NET preinstalled**).
+This is the TL-requested scenario: what happens when Pass 1 is the very first install, not a redundant one.
+
+**BEFORE (both jobs):**
+```
+(no dotnet — clean slate confirmed)
+/root/.dotnet not present
+/usr/share/dotnet not present
+```
+
+**v4 job — Pass 1 + Pass 2 on clean slate:**
+```
+Pass 1: install-dotnet.sh --skip-non-versioned-files --runtime dotnet --channel LTS
+        → Downloaded dotnet-runtime-10.0.10-linux-x64.tar.gz  (36,651,444 bytes = ~37 MB)
+        → Installed version is 10.0.10
+        → DOTNET_ROOT = /usr/share/dotnet
+
+Pass 2: install-dotnet.sh --channel 9.0
+        → Downloaded dotnet-sdk-9.0.316-linux-x64.tar.gz  (218,192,299 bytes = ~218 MB)
+        → Installed version is 9.0.316
+
+AFTER:
+  DOTNET_ROOT = /usr/share/dotnet
+  SDK:      9.0.316
+  Runtimes: Microsoft.AspNetCore.App 9.0.18
+            Microsoft.NETCore.App   9.0.18
+            Microsoft.NETCore.App  10.0.10   ← added by Pass 1
+  host/fxr: 10.0.10, 9.0.18               ← Pass 1 wrote 10.0.10 first
+```
+
+**issue_642 job — Pass 2 only on clean slate:**
+```
+[Pass 1 skipped]
+
+Pass 2: install-dotnet.sh --channel 9.0
+        → Downloaded dotnet-sdk-9.0.316-linux-x64.tar.gz  (218,192,299 bytes = ~218 MB)
+        → Installed version is 9.0.316
+
+AFTER:
+  DOTNET_ROOT = /usr/share/dotnet
+  SDK:      9.0.316
+  Runtimes: Microsoft.AspNetCore.App 9.0.18
+            Microsoft.NETCore.App   9.0.18   ← only the SDK's own runtime, no LTS
+  host/fxr: 9.0.18                          ← only the SDK's own hostfxr, no 10.0.10
+```
+
+**Side-by-side comparison (container clean-slate):**
+
+| | `v4` (Pass 1 + Pass 2) | `issue_642` (Pass 2 only) |
+|---|---|---|
+| BEFORE: any .NET? | ❌ None | ❌ None |
+| Downloads | ~37 MB (LTS runtime) + ~218 MB (SDK) = **~255 MB** | ~218 MB (SDK only) = **~218 MB** |
+| `host/fxr/` AFTER | `10.0.10`, `9.0.18` | `9.0.18` only |
+| Extra LTS runtime installed | `Microsoft.NETCore.App 10.0.10` | None |
+| `dotnet --version` works | ✅ | ✅ |
+| SDK functional | ✅ | ✅ |
+
+**Conclusion:** Even on a completely clean Ubuntu container (zero .NET), removing Pass 1 works correctly.
+The SDK installer (Pass 2) writes the muxer, `host/fxr/9.0.18/`, and the runtime in a single step.
+No LTS runtime is installed unnecessarily. `dotnet --version` and `dotnet --list-sdks` work as expected.
+The ~37 MB LTS runtime download is eliminated with no functional regression.
+
+---
+
+### Run — Self-hosted Windows x64, clean-slate, EOL+current versions ([run 30904891459](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30904891459), 2026-08-04)
+
+Workflow: `windows-self-hosted.yml`.
+Runner: `Muxer-test` (self-hosted, Windows, x64). Runner version: `2.336.0`.
+Both jobs had `clean_slate: true` — `C:\Program Files\dotnet` deleted before each job.
+Versions requested: `6.0.x + 7.0.x + 8.0.x + 9.0.x`.
+
+> **Note on build failure:** Both jobs failed at the final `dotnet build` step.
+> The `test-setup-dotnet` repo contains a `global.json` requiring SDK `9.0.100`.
+> On this persistent self-hosted runner, 8.0 and 9.0 SDKs were present in the
+> **runner's tool cache** (`C:\Windows\System32\actions-runner\_work\_tool\`) from a prior run.
+> The clean-slate step removes `C:\Program Files\dotnet` (DOTNET_ROOT) but does **not** touch
+> the tool cache. The action found 8.0 and 9.0 in the tool cache and did not re-extract them
+> to DOTNET_ROOT. After clean slate, `dotnet --list-sdks` (which reads DOTNET_ROOT) only saw
+> 6.0 and 7.0, so `dotnet build` with `global.json: 9.0.100` failed.
+> This is a tool cache / clean-slate interaction specific to persistent self-hosted runners —
+> not related to the Pass 1 / muxer investigation. The AFTER step data is fully valid.
+
+**BEFORE (both jobs):**
+```
+C:\Program Files\dotnet exists: False
+(no dotnet — clean slate confirmed)
+```
+
+**v4 job ([job 91977578375](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30904891459/job/91977578375)) — Pass 1 + Pass 2:**
+```
+Pass 1: install-dotnet.ps1 -SkipNonVersionedFiles -Runtime dotnet -Channel LTS
+        → Installed Microsoft.NETCore.App 10.0.10 runtime
+        → Added host\fxr\10.0.10\hostfxr.dll  ← NEW highest
+
+Pass 2 (6.0): Downloaded dotnet-sdk-6.0.428-win-x64.zip (265 MB) → Installed 6.0.428
+Pass 2 (7.0): Downloaded dotnet-sdk-7.0.410-win-x64.zip (288 MB) → Installed 7.0.410
+Pass 2 (8.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
+Pass 2 (9.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
+
+AFTER (DOTNET_ROOT = C:\Program Files\dotnet):
+  SDKs at DOTNET_ROOT : 6.0.428, 7.0.410   (8.0/9.0 in tool cache only)
+  Runtimes            : NETCore+AspNetCore+WinDesktop 6.0.36, 7.0.20
+                        Microsoft.NETCore.App 10.0.10  ← added by Pass 1
+  host\fxr            : 10.0.10, 6.0.36, 7.0.20       ← 10.0.10 highest (Pass 1)
+  Host: Version       : 10.0.10  Architecture: x64  RID: win-x64
+                        Commit: f7d90799ce
+
+  Muxer binary        : C:\Program Files\dotnet\dotnet.exe
+  Size                : 167,208 bytes
+  ProductVersion      : 10.0.10 @Commit: f7d90799ce4ef09a0bb257852a57248d2a8fb8dd
+  FileVersion         : 10,0,1026,32716 @Commit: f7d90799ce4ef09a0bb257852a57248d2a8fb8dd
+  SHA256              : 4377F10C78400F0370B88156773DE9843C07F14E65B3232005EC3179EF38D463
+```
+
+**issue_642 job ([job 91977578329](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30904891459/job/91977578329)) — Pass 2 only:**
+```
+[Pass 1 skipped — no LTS pre-pass]
+
+Pass 2 (6.0): Downloaded dotnet-sdk-6.0.428-win-x64.zip (265,214,223 bytes ~265 MB) → Installed 6.0.428
+Pass 2 (7.0): Downloaded dotnet-sdk-7.0.410-win-x64.zip (288,313,762 bytes ~288 MB) → Installed 7.0.410
+Pass 2 (8.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
+Pass 2 (9.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
+
+AFTER (DOTNET_ROOT = C:\Program Files\dotnet):
+  SDKs at DOTNET_ROOT : 6.0.428, 7.0.410
+  Runtimes            : NETCore+AspNetCore+WinDesktop 6.0.36, 7.0.20
+                        NO 10.0.10 runtime  ← Pass 1 skipped ✅
+  host\fxr            : 6.0.36, 7.0.20     ← NO 10.0.10 ✅  highest = 7.0.20
+  Host: Version       : 7.0.20  Architecture: x64
+                        Commit: 0fb6ac59fb
+
+  Muxer binary        : C:\Program Files\dotnet\dotnet.exe
+  Size                : 139,536 bytes       ← 6.0 vintage muxer (smaller than 10.0 build)
+  ProductVersion      : 6.0.36 @Commit: f1dd57165bfd91875761329ac3a8b17f6606ad18
+  FileVersion         : 6,0,3624,51421 @Commit: f1dd57165bfd91875761329ac3a8b17f6606ad18
+  SHA256              : D4401F5FBDEA869BB7211B00594746EF6962B7DD2BFCEB749889B920070C3F9F
+```
+
+**Side-by-side comparison (self-hosted Windows x64, clean slate, EOL+current):**
+
+| | `v4` ([job 91977578375](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30904891459/job/91977578375)) | `issue_642` ([job 91977578329](https://github.com/chiranjib-swain/test-setup-dotnet/actions/runs/30904891459/job/91977578329)) |
+|---|---|---|
+| Pass 1 (LTS pre-pass) | ✅ Ran — downloaded LTS 10.0.10 runtime | ❌ Skipped |
+| SDKs in DOTNET_ROOT | 6.0.428, 7.0.410 | 6.0.428, 7.0.410 |
+| `host\fxr\` entries | **10.0.10**, 6.0.36, 7.0.20 | 6.0.36, 7.0.20 |
+| Highest hostfxr loaded | **10.0.10** | **7.0.20** |
+| `Host: Version` | 10.0.10 | 7.0.20 |
+| Muxer `ProductVersion` | **10.0.10** (167,208 bytes) | **6.0.36** (139,536 bytes) |
+| Muxer SHA256 | `4377F10C...` | `D4401F5F...` (different binary) |
+| LTS runtime `10.0.10` present | ✅ Yes | ❌ No |
+
+**Key findings from this run:**
+
+1. **Old muxer loads newer hostfxr** — issue_642 writes the 6.0.36 muxer binary (139 KB, 6.0 vintage).
+   That binary successfully loads `host\fxr\7.0.20\hostfxr.dll` (the highest available), proving
+   the muxer does not need to match or exceed the hostfxr version.
+
+2. **Pass 1 purpose confirmed on clean slate** — On v4, Pass 1 installs LTS 10.0.10 runtime
+   BEFORE any SDK pass. This writes the 10.0.10 muxer binary AND `host\fxr\10.0.10\`.
+   Without it (issue_642), the muxer is whatever the first SDK installer writes (6.0.36 here).
+
+3. **Tool cache interaction on persistent self-hosted runners** — Cleaning DOTNET_ROOT is not
+   a true clean slate on self-hosted runners because the action's tool cache is separate.
+   Versions already in the tool cache are not re-extracted to DOTNET_ROOT after a clean slate.
+   For a genuine clean slate on Windows, the tool cache must also be cleared:
+   `Remove-Item -Recurse -Force "C:\Windows\System32\actions-runner\_work\_tool\dotnet*"`
+
+---
+
 
