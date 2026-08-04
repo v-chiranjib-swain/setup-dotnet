@@ -696,14 +696,13 @@ The ~37 MB LTS runtime download is eliminated with no functional regression.
 Workflow: `windows-self-hosted.yml`.
 Runner: `Muxer-test` (self-hosted, Windows, x64). Runner version: `2.336.0`.
 Both jobs had `clean_slate: true` — `C:\Program Files\dotnet` deleted before each job.
-Versions requested: `6.0.x + 7.0.x + 8.0.x + 9.0.x`.
+Versions requested: `6.0.x + 7.0.x`.
 
 > **Note on build failure:** Both jobs failed at the final `dotnet build` step.
 > The `test-setup-dotnet` repo contains a `global.json` requiring SDK `9.0.100`.
 > On this persistent self-hosted runner, 8.0 and 9.0 SDKs were present in the
 > **runner's tool cache** (`C:\Windows\System32\actions-runner\_work\_tool\`) from a prior run.
 > The clean-slate step removes `C:\Program Files\dotnet` (DOTNET_ROOT) but does **not** touch
-> the tool cache. The action found 8.0 and 9.0 in the tool cache and did not re-extract them
 > to DOTNET_ROOT. After clean slate, `dotnet --list-sdks` (which reads DOTNET_ROOT) only saw
 > 6.0 and 7.0, so `dotnet build` with `global.json: 9.0.100` failed.
 > This is a tool cache / clean-slate interaction specific to persistent self-hosted runners —
@@ -723,8 +722,6 @@ Pass 1: install-dotnet.ps1 -SkipNonVersionedFiles -Runtime dotnet -Channel LTS
 
 Pass 2 (6.0): Downloaded dotnet-sdk-6.0.428-win-x64.zip (265 MB) → Installed 6.0.428
 Pass 2 (7.0): Downloaded dotnet-sdk-7.0.410-win-x64.zip (288 MB) → Installed 7.0.410
-Pass 2 (8.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
-Pass 2 (9.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
 
 AFTER (DOTNET_ROOT = C:\Program Files\dotnet):
   SDKs at DOTNET_ROOT : 6.0.428, 7.0.410   (8.0/9.0 in tool cache only)
@@ -747,8 +744,6 @@ AFTER (DOTNET_ROOT = C:\Program Files\dotnet):
 
 Pass 2 (6.0): Downloaded dotnet-sdk-6.0.428-win-x64.zip (265,214,223 bytes ~265 MB) → Installed 6.0.428
 Pass 2 (7.0): Downloaded dotnet-sdk-7.0.410-win-x64.zip (288,313,762 bytes ~288 MB) → Installed 7.0.410
-Pass 2 (8.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
-Pass 2 (9.0): Served from runner tool cache — NOT re-extracted to DOTNET_ROOT
 
 AFTER (DOTNET_ROOT = C:\Program Files\dotnet):
   SDKs at DOTNET_ROOT : 6.0.428, 7.0.410
