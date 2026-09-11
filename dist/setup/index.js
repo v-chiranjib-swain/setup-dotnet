@@ -45056,14 +45056,16 @@ class DotnetCoreInstaller {
     quality;
     architecture;
     dotnetChannel;
+    skipLtsPrepass;
     static {
         DotnetInstallDir.setEnvironmentVariable();
     }
-    constructor(version, quality, architecture, dotnetChannel) {
+    constructor(version, quality, architecture, dotnetChannel, skipLtsPrepass = false) {
         this.version = version;
         this.quality = quality;
         this.architecture = architecture;
         this.dotnetChannel = dotnetChannel;
+        this.skipLtsPrepass = skipLtsPrepass;
     }
     async installDotnet() {
         const versionResolver = new DotnetVersionResolver(this.version, this.quality, this.dotnetChannel);
@@ -45078,25 +45080,28 @@ class DotnetCoreInstaller {
             ]
             : [];
         /**
-         * Install dotnet runtime first in order to get
-         * the latest stable version of dotnet CLI
+         * Pass 1 (LTS runtime pre-pass) — opt-in skip via 'skip-lts-prepass' (issue #642).
+         * Kept as default behavior for backward compatibility; skipping avoids a
+         * redundant LTS download and the hostfxr upgrade side-effect on Windows.
          */
-        const runtimeInstallOutput = await new DotnetInstallScript()
-            .useArchitecture(this.architecture)
-            // If dotnet CLI is already installed - avoid overwriting it
-            .useArguments(utils_IS_WINDOWS ? '-SkipNonVersionedFiles' : '--skip-non-versioned-files')
-            // Install only runtime + CLI
-            .useArguments(utils_IS_WINDOWS ? '-Runtime' : '--runtime', 'dotnet')
-            // Use latest stable version
-            .useArguments(utils_IS_WINDOWS ? '-Channel' : '--channel', 'LTS')
-            .useArguments(...architectureArguments)
-            .execute();
-        if (runtimeInstallOutput.exitCode) {
-            /**
-             * dotnetInstallScript will install CLI and runtime even if previous script haven't succeded,
-             * so at this point it's too early to throw an error
-             */
-            warning(`Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`);
+        if (!this.skipLtsPrepass) {
+            const runtimeInstallOutput = await new DotnetInstallScript()
+                .useArchitecture(this.architecture)
+                // If dotnet CLI is already installed - avoid overwriting it
+                .useArguments(utils_IS_WINDOWS ? '-SkipNonVersionedFiles' : '--skip-non-versioned-files')
+                // Install only runtime + CLI
+                .useArguments(utils_IS_WINDOWS ? '-Runtime' : '--runtime', 'dotnet')
+                // Use latest stable version
+                .useArguments(utils_IS_WINDOWS ? '-Channel' : '--channel', 'LTS')
+                .useArguments(...architectureArguments)
+                .execute();
+            if (runtimeInstallOutput.exitCode) {
+                /**
+                 * dotnetInstallScript will install CLI and runtime even if previous script haven't succeded,
+                 * so at this point it's too early to throw an error
+                 */
+                warning(`Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`);
+            }
         }
         /**
          * Install dotnet over the latest version of
@@ -105819,8 +105824,9 @@ async function run() {
             }
             let dotnetInstaller;
             const uniqueVersions = new Set(versions.map(v => (v.toLowerCase() === 'latest' ? 'latest' : v)));
+            const skipLtsPrepass = getBooleanInput('skip-lts-prepass');
             for (const version of uniqueVersions) {
-                dotnetInstaller = new DotnetCoreInstaller(version, quality, architecture, version.toLowerCase() === 'latest' ? dotnetChannel : undefined);
+                dotnetInstaller = new DotnetCoreInstaller(version, quality, architecture, version.toLowerCase() === 'latest' ? dotnetChannel : undefined, skipLtsPrepass);
                 const installedVersion = await dotnetInstaller.installDotnet();
                 installedDotnetVersions.push(installedVersion);
             }
