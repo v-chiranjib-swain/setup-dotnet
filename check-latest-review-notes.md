@@ -124,11 +124,46 @@ exact scenario for real:
 4. Re-dispatched after the fix: **all 3 platforms passed**
    (run: https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/34971743697).
 
+## Real CI validation of all edge cases (all 10 local scenarios, re-verified live)
+
+Added a second `workflow_dispatch`-only workflow
+(`.github/workflows/check-latest-edge-cases-test.yml`) to `test-setup-dotnet`,
+replicating every scenario proven locally, as real steps against
+`v-chiranjib-swain/setup-dotnet@feature/check-latest-local-sdk-reuse` on actual
+GitHub-hosted runners. Each step builds a synthetic `DOTNET_INSTALL_DIR` fixture and,
+where relevant, sets `https_proxy`/`http_proxy` to an unreachable address
+(`http://127.0.0.1:1`) to force a real air-gapped condition; assertions check either
+the `dotnet-version` output (for expected-success cases) or the step's `outcome` via
+`continue-on-error: true` (for expected-failure/fallback cases).
+
+Run: https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/34973400817
+— **all steps passed** across 2 jobs (`edge-cases-ubuntu`, 10m14s; `edge-cross-arch-macos`, 2m9s).
+
+| Scenario | Step | Result |
+|---|---|---|
+| A | `check-latest: false` reuses local SDK offline | ✓ |
+| B | `check-latest` default `true` ignores local SDK, fails offline | ✓ |
+| C | `DOTNET_CHECK_LATEST` env var alone triggers reuse | ✓ |
+| D | Invalid `DOTNET_CHECK_LATEST=yes` warns (message confirmed verbatim in run annotations) + falls back to `true` + fails offline | ✓ |
+| E | `global.json` floor above local SDK → rejected, falls online, fails offline | ✓ |
+| F | `global.json` floor at/below local SDK → reused | ✓ |
+| G | Cross-arch (`arm64` on ubuntu x64) bypasses local reuse, fails offline | ✓ |
+| G (macOS) | Cross-arch (`x64` on macOS arm64) bypasses local reuse, fails offline | ✓ (separate job) |
+| H | Feature-band matching picks `8.0.105` (1xx band), not `8.0.203` (2xx band) | ✓ |
+| I | Orphaned SDK folder (no `dotnet.dll`) ignored, falls online, fails offline | ✓ |
+| J | Symlinked SDK folder recognized and reused | ✓ |
+
+The live run's annotations captured the exact documented warning text verbatim:
+`Value 'yes' is not supported for the DOTNET_CHECK_LATEST environment variable.
+Supported values are: true, false. The 'check-latest' option falls back to 'true'.`
+— matching the code and the earlier local test byte-for-byte.
+
 ## Outstanding / cleanup
 
 - Local repo (`~/Desktop/setup-dotnet`) is on branch `feature/check-latest-local-sdk-reuse`.
 - Fork branch `feature/check-latest-local-sdk-reuse` pushed to
   `v-chiranjib-swain/setup-dotnet`.
-- Test workflow `.github/workflows/check-latest-local-reuse-test.yml` added to
-  `v-chiranjib-swain/test-setup-dotnet` (`main`, 2 commits).
-- Decide whether to delete the branch/workflow now or keep them for future re-runs.
+- Test workflows added to `v-chiranjib-swain/test-setup-dotnet` (`main`, 4 commits):
+  - `.github/workflows/check-latest-local-reuse-test.yml`
+  - `.github/workflows/check-latest-edge-cases-test.yml`
+- Decide whether to delete the branch/workflows now or keep them for future re-runs.
