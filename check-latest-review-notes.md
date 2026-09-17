@@ -100,6 +100,44 @@ comments**.
 > practice and correct today (LTS/STS channels are all ≥ .NET 6), but it's a
 > different code path than the online resolver's `qualityFlag`. Worth a short
 > comment noting the assumption so it doesn't silently drift.
+>
+> **Comment 3 — `README.md` / `action.yml`, `check-latest: false` docs:**
+> Non-blocking, documentation-only: `check-latest: false` reuses whatever's under
+> `sdk/<version>/` based purely on folder name + presence of `dotnet.dll` — there's
+> no hash/signature verification that the reused SDK is an unmodified, legitimate
+> build. That's an inherent and reasonable trade-off for the air-gapped use case
+> (mirrors `setup-node`/`setup-python`'s existing `check-latest: false` semantics),
+> but the README doesn't currently say so explicitly. Given `DOTNET_CHECK_LATEST`
+> can also be set at the self-hosted runner level (affecting every job scheduled on
+> that runner, as the README's own "a dedicated runner is recommended" note already
+> hints at), it'd be worth adding a one-line callout: only enable this on runners
+> whose pre-installed SDKs/base image you already trust, since no integrity check is
+> performed on the reused SDK.
+
+## Security review
+
+Walked the diff for OWASP-Top-10-style issues: no injection, auth-bypass, SSRF, or
+deserialization concerns found.
+
+- All install-script invocations still go through `exec.getExecOutput` with an
+  **argument array**, not shell-string interpolation — unchanged from before, no new
+  command-injection surface.
+- New regexes (`FeatureBandSyntax`, major/minor/channel matchers) are simple, linear,
+  non-backtracking patterns over short bounded strings — no ReDoS risk.
+- No new network calls, URLs, or credential handling introduced.
+- **Trust-model shift (real, but inherent to the feature, see Comment 3 above):**
+  `check-latest: false` trusts a local SDK folder based only on name + presence of
+  `dotnet.dll`, with no signature/hash verification — a deliberate trade-off for the
+  air-gapped scenario, consistent with `setup-node`/`setup-python` precedent.
+- **Blast radius of `DOTNET_CHECK_LATEST`:** a runner-level env var affects every job
+  on a shared self-hosted runner, not just the opting-in workflow; the PR's README
+  already recommends a dedicated runner for this.
+- Symlinked SDK folder handling has a theoretical check-then-use (TOCTOU) gap, but it
+  requires an attacker who already has local filesystem write access to the runner —
+  not a meaningfully new privilege-escalation vector.
+- **Positive:** the feature deliberately avoids `@actions/tool-cache`/`actions/cache`,
+  sidestepping the known cross-branch/cross-workflow cache-poisoning attack class
+  entirely — reuse is scoped strictly to the runner's own local disk.
 
 ## Real CI validation (not just local simulation)
 
