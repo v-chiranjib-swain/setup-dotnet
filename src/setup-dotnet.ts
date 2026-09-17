@@ -312,7 +312,9 @@ function getVersionFromGlobalJson(globalJsonPath: string): GlobalJsonVersion {
           break;
       }
 
-      if (version !== globalJson.sdk.version) {
+      // 'latestMajor' clears 'version' to '', which never matches locally, so
+      // there's no local-reuse case for a floor to apply to.
+      if (version && version !== globalJson.sdk.version) {
         minimumVersion = globalJson.sdk.version;
       }
     }

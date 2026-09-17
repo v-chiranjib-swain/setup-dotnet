@@ -450,6 +450,9 @@ export class DotnetCoreInstaller {
    * is only honored when the requested major tag is .NET 6 or higher. An
    * unknown major (bare 'latest', wildcards, LTS/STS) resolves to a supported
    * channel online, so quality applies there.
+   *
+   * For bare 'latest' without a channel, the major version is unknown locally.
+   * Default to true so preview/daily quality can be honored for local SDKs.
    */
   private qualityApplies(): boolean {
     const source =

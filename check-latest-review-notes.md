@@ -64,9 +64,10 @@ an air-gapped network. Nothing here touched the real `~/.dotnet` install.
 | 9 | Orphaned SDK folder (dir exists, no `dotnet.dll`) | Ignored, logged as `<none>` locally installed |
 | 10 | Symlinked SDK folder | Detected and reused just like a real directory |
 
-## Two minor nitpicks identified and empirically verified
+## Code review findings
 
 1. **`src/setup-dotnet.ts`, `getVersionFromGlobalJson` — `rollForward: latestMajor`**
+   (real, non-blocking nitpick — raised to the PR author)
    Produces `{version: '', minimumVersion: <sdk.version>}` (verified by running the
    function standalone). The `minimumVersion` is unreachable: `version=''` never
    matches anything in `findLocalSdkVersion()`, so it always falls to the online path
@@ -75,33 +76,97 @@ an air-gapped network. Nothing here touched the real `~/.dotnet` install.
    or skipping the computation for this branch.
 
 2. **`src/installer.ts`, `qualityApplies()` — bare `latest` with no `dotnet-channel`**
-   Returns `true` unconditionally (no major digit to check), whereas the online
-   resolver derives its `qualityFlag` from the actual *resolved* LTS/STS version's
-   major. Verified live: with a local GA and a local preview SDK, requesting
-   `latest` + `dotnet-quality: preview` + `check-latest: false` correctly reused the
-   preview build. Correct today (all supported LTS/STS channels are ≥ .NET 6), but
-   the two code paths check different things — worth a comment noting the assumption.
+   (investigated, concluded **not** worth raising — see below)
+   Initially flagged because it returns `true` unconditionally (no major digit to
+   check) while the online resolver derives its `qualityFlag` from the actual
+   *resolved* channel's major. Further tracing showed this isn't just "correct today,"
+   it's **functionally required**: `findLocalSdkVersion()` computes
+   `wantsPrerelease = ['preview','daily'].includes(quality) && qualityApplies()`. If
+   `qualityApplies()` returned `false` for this case instead, `wantsPrerelease` would
+   always be `false` for bare `latest` with no channel — meaning
+   `check-latest: false` + `dotnet-version: latest` + `dotnet-quality: preview` would
+   **never** match a local prerelease SDK, silently breaking the very case it's meant
+   to support. So `true` isn't a convenient default, it's the only value that keeps
+   this combination working at all. (It also happens to agree with the real online
+   resolver today — verified live against the actual `releases-index.json`: current
+   non-EOL channels are `11.0`/`10.0`/`9.0`/`8.0`, all major ≥ 6, and every channel
+   below major 6 is already permanently `eol` — but that agreement is a bonus, not
+   the reason this is correct.)
 
-Both are **non-blocking** nitpicks; overall recommendation: **Approve with minor
-comments**.
+Only point 1 is a genuine, worth-raising nitpick; point 2 was investigated and
+dropped after tracing its actual effect on `wantsPrerelease`.
 
-### Drafted review comment text
+### Resolution: suggested fix implemented and verified locally
 
-> **Comment 1 — `src/setup-dotnet.ts`, `getVersionFromGlobalJson`:**
-> Nit (verified locally): For `rollForward: latestMajor`, `version` is set to `''`,
-> but `minimumVersion` is still computed as `globalJson.sdk.version`. Confirmed this
-> is dead weight — `findLocalSdkVersion()` can never match an empty version spec, so
-> `minimumVersion` is computed but never consulted for this branch. Consider skipping
-> the computation for `latestMajor` or adding a one-line comment.
+- **Point 1 fixed with an actual code change** (not just a comment), in
+  [src/setup-dotnet.ts](src/setup-dotnet.ts) `getVersionFromGlobalJson`:
+  ```ts
+  // 'latestMajor' clears 'version' to '', which never matches locally, so
+  // there's no local-reuse case for a floor to apply to.
+  if (version && version !== globalJson.sdk.version) {
+    minimumVersion = globalJson.sdk.version;
+  }
+  ```
+  Verified standalone: `latestMajor` now yields `minimumVersion: undefined` (no
+  more dead computation), while `latestMinor`/`latestFeature`/`latestPatch` are
+  completely unaffected (only `latestMajor` ever produces an empty `version`).
+  Full suite re-run after the change: **201/201 tests pass**, lint/type-check clean.
+
+- **Point 2: no code or behavior change.** Tightened the doc comment on
+  `qualityApplies()` in [src/installer.ts](src/installer.ts) to state plainly that
+  the `true` fallback is required for `wantsPrerelease` to work for this case, with
+  the EOL-based online agreement noted as a secondary observation, not the
+  justification.
+
+### Final comments to send to the PR author
+
+These are the finalized wording, ready to post as-is:
+
+> **1. Could we guard the `minimumVersion` assignment with `version` being non-empty?**
 >
-> **Comment 2 — `src/installer.ts`, `qualityApplies()`:**
-> Nit (verified locally): For `dotnet-version: latest` with no `dotnet-channel`,
-> `qualityApplies()` returns `true` unconditionally. Verified this is exercised in
-> practice and correct today (LTS/STS channels are all ≥ .NET 6), but it's a
-> different code path than the online resolver's `qualityFlag`. Worth a short
-> comment noting the assumption so it doesn't silently drift.
+> For `rollForward: latestMajor`, `version` is intentionally set to `''` at
+> lines 298–300, but the condition at
+> [line 315](https://github.com/v-mahabaleshwars/setup-dotnet/blob/2a2a309ce80aa41b6c43b081a5997323b14e7de1/src/setup-dotnet.ts#L315)
+> still sets `minimumVersion` because `'' !== globalJson.sdk.version`. This produces
+> `{version: '', minimumVersion: <sdk.version>}`, even though the empty version
+> cannot be matched by the local SDK resolution path.
 >
-> **Comment 3 — `README.md` / `action.yml`, `check-latest: false` docs:**
+> I verified this locally with `latestMajor`. Adding the guard below results in
+> `{version: '', minimumVersion: undefined}`, while the other roll-forward cases
+> continue to set `minimumVersion` as expected:
+>
+> ```ts
+> if (version && version !== globalJson.sdk.version) {
+>   minimumVersion = globalJson.sdk.version;
+> }
+> ```
+>
+> Would you consider adding this guard here?
+>
+> **2. Could we add a short comment explaining why `qualityApplies()` returns `true`
+> when the major version is unknown?**
+>
+> For `dotnet-version: latest` without `dotnet-channel`, the major version cannot be
+> determined locally. Returning `true` is intentional so that `preview`/`daily`
+> quality can still be honored when matching a locally installed SDK.
+>
+> Something like:
+>
+> ```ts
+> /**
+>  * For bare 'latest' without a channel, the major version is unknown locally.
+>  * Default to true so preview/daily quality can be honored for local SDKs.
+>  */
+> ```
+
+Note: comment 2 is deliberately phrased as a documentation request, not a bug report —
+tracing `wantsPrerelease` in `findLocalSdkVersion()` showed `true` is functionally
+required here (see "Code review findings" above), so the ask is only for a comment
+explaining the assumption, not a behavior change.
+
+### Optional additional note (not one of the 2 final comments, raise only if asked for more)
+
+> **`README.md` / `action.yml`, `check-latest: false` docs:**
 > Non-blocking, documentation-only: `check-latest: false` reuses whatever's under
 > `sdk/<version>/` based purely on folder name + presence of `dotnet.dll` — there's
 > no hash/signature verification that the reused SDK is an unmodified, legitimate
@@ -125,7 +190,7 @@ deserialization concerns found.
 - New regexes (`FeatureBandSyntax`, major/minor/channel matchers) are simple, linear,
   non-backtracking patterns over short bounded strings — no ReDoS risk.
 - No new network calls, URLs, or credential handling introduced.
-- **Trust-model shift (real, but inherent to the feature, see Comment 3 above):**
+- **Trust-model shift (real, but inherent to the feature, see the optional note above):**
   `check-latest: false` trusts a local SDK folder based only on name + presence of
   `dotnet.dll`, with no signature/hash verification — a deliberate trade-off for the
   air-gapped scenario, consistent with `setup-node`/`setup-python` precedent.
