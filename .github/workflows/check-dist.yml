@@ -14,6 +14,7 @@ on:
 jobs:
   call-check-dist:
     name: Check dist/
+    cache-mode: read
     uses: actions/reusable-workflows/.github/workflows/check-dist.yml@main
     with:
       node-version: '24'
