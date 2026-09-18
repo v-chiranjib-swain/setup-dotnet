@@ -3,6 +3,76 @@
 **PR under review:** https://github.com/actions/setup-dotnet/pull/774
 **Related issue:** https://github.com/actions/setup-dotnet/issues/762 (setup-dotnet fails on air-gapped runners for floating versions)
 
+## Final review summary (share with team)
+
+**Verdict: Approve with minor comments.**
+
+Validated locally (build/lint/type-check clean, 201/201 unit tests) and live —
+both against a synthetic offline fixture and on real GitHub-hosted runners
+(ubuntu/windows/macos) — across all 10 documented and edge-case scenarios
+(local-SDK reuse, `DOTNET_CHECK_LATEST` env fallback, `global.json` floor
+enforcement, cross-arch bypass, feature-band matching, orphaned/symlinked SDK
+folders), plus a full live matrix against all 9 official `global.json`
+`rollForward` values. No blocking issues found.
+
+**Superseded finding — no longer being raised:** the originally-drafted "guard
+`minimumVersion` with `version` being non-empty" comment (for `rollForward:
+latestMajor`) is **withdrawn**. Deeper investigation (see "Deeper finding"
+below) showed that `minimumVersion` isn't actually dead weight to remove —
+it's exactly the piece of data a *correct* implementation of `latestMajor`
+would need. Suppressing it treats the symptom (a misleading debug line)
+rather than the real gap (local reuse for `latestMajor` isn't implemented at
+all). Raising the real gap instead is more useful to the author than asking
+for a guard that would need to be reverted if they ever implement `latestMajor`
+properly.
+
+> **Deeper finding — `latestMajor` (and related `latestMinor`) local reuse gap:**
+>
+> Per the [official `global.json` docs](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward),
+> `rollForward: latestMajor` should: *"Use the highest installed .NET SDK with
+> a version that's greater than or equal to the specified value. If not found,
+> fail."* That means **any major** ≥ the declared floor should be reusable
+> offline (e.g. a declared `7.0.200` should happily reuse a locally installed
+> `9.0.423`).
+>
+> Verified live (https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35339385300)
+> that this is **not** what happens: `check-latest: false` never attempts local
+> reuse for `latestMajor` at all — `version` is unconditionally cleared to `''`
+> in `getVersionFromGlobalJson`, and `''` never matches any pattern
+> `findLocalSdkVersion()` checks, so it always falls back online regardless of
+> what's installed, even when a local SDK clearly satisfies the documented rule.
+>
+> A related gap was also found in `latestMinor`: even though it *is*
+> implemented, the widened spec (`version = major`) resolves through
+> `channelForMajor()` to `major.0`, hardcoding `minor = 0` — so a genuinely
+> higher-minor SDK that satisfies the official "any minor ≥ floor" rule (e.g.
+> `8.1.100` for a declared `8.0.100`) still isn't reused locally.
+>
+> Suggested framing for the PR author: implementing proper local reuse for
+> `latestMajor` (and fixing the `latestMinor` minor-constraint) would actually
+> need `minimumVersion` to be set and consulted for `latestMajor` — the
+> opposite of removing it — by adding a branch to `findLocalSdkVersion()` that,
+> for an empty `version` with a `minimumVersion` present, picks the highest
+> installed SDK (any major) that's `>= minimumVersion`.
+
+The one remaining non-blocking comment:
+
+> **Could we add a short comment explaining why `qualityApplies()` returns `true`
+> when the major version is unknown?**
+>
+> For `dotnet-version: latest` without `dotnet-channel`, the major version cannot be
+> determined locally. Returning `true` is intentional so that `preview`/`daily`
+> quality can still be honored when matching a locally installed SDK.
+>
+> Something like:
+>
+> ```ts
+> /**
+>  * For bare 'latest' without a channel, the major version is unknown locally.
+>  * Default to true so preview/daily quality can be honored for local SDKs.
+>  */
+> ```
+
 ## Summary of the change
 
 Adds a `check-latest` input (default `true`, non-breaking) to `actions/setup-dotnet`.
@@ -67,13 +137,15 @@ an air-gapped network. Nothing here touched the real `~/.dotnet` install.
 ## Code review findings
 
 1. **`src/setup-dotnet.ts`, `getVersionFromGlobalJson` — `rollForward: latestMajor`**
-   (real, non-blocking nitpick — raised to the PR author)
+   (superseded — see "Deeper finding" at the top; withdrawn as a comment to send)
    Produces `{version: '', minimumVersion: <sdk.version>}` (verified by running the
-   function standalone). The `minimumVersion` is unreachable: `version=''` never
-   matches anything in `findLocalSdkVersion()`, so it always falls to the online path
-   regardless of what's installed locally — confirmed live with a local SDK well above
-   the floor still triggering an online install attempt. Harmless, but worth a comment
-   or skipping the computation for this branch.
+   function standalone). Initially flagged as dead weight, since `version=''` never
+   matches anything in `findLocalSdkVersion()`. Further investigation showed this
+   framing was backwards: `minimumVersion` isn't dead weight to remove — it's exactly
+   what a *correct* `latestMajor` local-reuse implementation would need to consult.
+   The real problem is that `findLocalSdkVersion()` never attempts local reuse for
+   `latestMajor` at all, regardless of the floor. Suppressing `minimumVersion` treats
+   the symptom (a misleading debug line), not the actual missing capability.
 
 2. **`src/installer.ts`, `qualityApplies()` — bare `latest` with no `dotnet-channel`**
    (investigated, concluded **not** worth raising — see below)
@@ -93,78 +165,31 @@ an air-gapped network. Nothing here touched the real `~/.dotnet` install.
    below major 6 is already permanently `eol` — but that agreement is a bonus, not
    the reason this is correct.)
 
-Only point 1 is a genuine, worth-raising nitpick; point 2 was investigated and
-dropped after tracing its actual effect on `wantsPrerelease`.
+Point 1 is withdrawn (see "Deeper finding" — the real gap is worth raising instead of
+the guard); point 2 was investigated and dropped after tracing its actual effect on
+`wantsPrerelease`.
 
-### Resolution: suggested fix implemented and verified locally
+### Local code changes: historical, not part of the current recommendation
 
-- **Point 1 fixed with an actual code change** (not just a comment), in
-  [src/setup-dotnet.ts](src/setup-dotnet.ts) `getVersionFromGlobalJson`:
-  ```ts
-  // 'latestMajor' clears 'version' to '', which never matches locally, so
-  // there's no local-reuse case for a floor to apply to.
-  if (version && version !== globalJson.sdk.version) {
-    minimumVersion = globalJson.sdk.version;
-  }
-  ```
-  Verified standalone: `latestMajor` now yields `minimumVersion: undefined` (no
-  more dead computation), while `latestMinor`/`latestFeature`/`latestPatch` are
-  completely unaffected (only `latestMajor` ever produces an empty `version`).
-  Full suite re-run after the change: **201/201 tests pass**, lint/type-check clean.
-
-- **Point 2: no code or behavior change.** Tightened the doc comment on
-  `qualityApplies()` in [src/installer.ts](src/installer.ts) to state plainly that
-  the `true` fallback is required for `wantsPrerelease` to work for this case, with
-  the EOL-based online agreement noted as a secondary observation, not the
-  justification.
+The `version && ` guard was applied and verified locally in
+[src/setup-dotnet.ts](src/setup-dotnet.ts) `getVersionFromGlobalJson` earlier in this
+review (201/201 tests pass, lint/type-check clean), and the `qualityApplies()` doc
+comment in [src/installer.ts](src/installer.ts) was tightened. Both remain in the
+local checkout / fork branch as an artifact of the investigation, but **the guard is
+no longer being recommended to the PR author** now that the deeper `latestMajor` gap
+is the more useful thing to raise. The `qualityApplies()` comment tightening still
+stands on its own merits (documentation-only, no behavior change) but isn't one of
+the comments being sent either — see "Final review summary" at the top for what's
+actually being sent.
 
 ### Final comments to send to the PR author
 
-These are the finalized wording, ready to post as-is:
+See the **"Final review summary"** section at the top of this document for the
+finalized wording (the `latestMajor`/`latestMinor` gap finding plus the
+`qualityApplies()` comment request). The previously-drafted "guard `minimumVersion`"
+comment shown in earlier revisions of this document has been withdrawn.
 
-> **1. Could we guard the `minimumVersion` assignment with `version` being non-empty?**
->
-> For `rollForward: latestMajor`, `version` is intentionally set to `''` at
-> lines 298–300, but the condition at
-> [line 315](https://github.com/v-mahabaleshwars/setup-dotnet/blob/2a2a309ce80aa41b6c43b081a5997323b14e7de1/src/setup-dotnet.ts#L315)
-> still sets `minimumVersion` because `'' !== globalJson.sdk.version`. This produces
-> `{version: '', minimumVersion: <sdk.version>}`, even though the empty version
-> cannot be matched by the local SDK resolution path.
->
-> I verified this locally with `latestMajor`. Adding the guard below results in
-> `{version: '', minimumVersion: undefined}`, while the other roll-forward cases
-> continue to set `minimumVersion` as expected:
->
-> ```ts
-> if (version && version !== globalJson.sdk.version) {
->   minimumVersion = globalJson.sdk.version;
-> }
-> ```
->
-> Would you consider adding this guard here?
->
-> **2. Could we add a short comment explaining why `qualityApplies()` returns `true`
-> when the major version is unknown?**
->
-> For `dotnet-version: latest` without `dotnet-channel`, the major version cannot be
-> determined locally. Returning `true` is intentional so that `preview`/`daily`
-> quality can still be honored when matching a locally installed SDK.
->
-> Something like:
->
-> ```ts
-> /**
->  * For bare 'latest' without a channel, the major version is unknown locally.
->  * Default to true so preview/daily quality can be honored for local SDKs.
->  */
-> ```
-
-Note: comment 2 is deliberately phrased as a documentation request, not a bug report —
-tracing `wantsPrerelease` in `findLocalSdkVersion()` showed `true` is functionally
-required here (see "Code review findings" above), so the ask is only for a comment
-explaining the assumption, not a behavior change.
-
-### Optional additional note (not one of the 2 final comments, raise only if asked for more)
+### Optional additional note (not one of the final comments, raise only if asked for more)
 
 > **`README.md` / `action.yml`, `check-latest: false` docs:**
 > Non-blocking, documentation-only: `check-latest: false` reuses whatever's under
@@ -261,12 +286,56 @@ The live run's annotations captured the exact documented warning text verbatim:
 Supported values are: true, false. The 'check-latest' option falls back to 'true'.`
 — matching the code and the earlier local test byte-for-byte.
 
+## Deeper investigation: `rollForward` matrix vs. official semantics
+
+Followed up on the withdrawn "guard `minimumVersion`" comment by checking `latestMajor`
+against the actual documented contract at
+https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward, then
+tested **all 9** official `rollForward` values live in one workflow
+(`.github/workflows/global-json-rollforward-matrix-test.yml` on `test-setup-dotnet`).
+
+**First run** (against our own fork's `efe6a36` commit — includes the withdrawn,
+now-historical `minimumVersion` guard fix):
+https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35339385300
+— all 9 jobs passed their assertions.
+
+**Re-run against the real, unmodified PR source** — `v-mahabaleshwars/setup-dotnet@feature/762-check-latest-input`
+(the actual PR author's branch, not our fork), to rule out any doubt that the
+guard fix (or any other fork-only commit) influenced the results:
+https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35342585139
+— **identical outcome**, all 8 jobs (`latestPatch`, `latestFeature`, `latestMinor`,
+`latestMinor-higher-minor-gap`, `latestMajor`, `disable`, `disable-no-exact-match`,
+`legacy-patch-value-pinned-behavior`) completed successfully, same gap findings
+confirmed against the literal PR-author's branch.
+
+| `rollForward` | Official semantics | Fixture | Result |
+|---|---|---|---|
+| `latestPatch` | Latest patch in same major.minor.band, ≥ floor | `8.0.100` (below), `8.0.199` (above, same band) | ✅ Correctly reused `8.0.199` |
+| `latestFeature` | Highest feature band+patch in same major.minor, ≥ floor | `8.0.300` (below), `8.0.402` (above, different band) | ✅ Correctly reused `8.0.402` |
+| `latestMinor` | Highest minor+band+patch in same major, ≥ floor | `8.0.050` (below), `8.0.200` (above, same minor) | ✅ Correctly reused `8.0.200` |
+| `latestMinor` (gap check) | Same rule — a *higher minor* also satisfies it | only `8.1.100` installed | ❌ **Gap**: not reused (`channelForMajor()` hardcodes `minor=0`) |
+| `latestMajor` | Highest installed SDK, **any major**, ≥ floor | `9.0.423` (higher major, satisfies floor) | ❌ **Gap**: local reuse never attempted at all |
+| `disable` | Exact match only | exact `8.0.302` installed | ✅ Correctly reused the exact match |
+| `disable` (negative) | Exact match only — must reject substitutes | only `8.0.303` installed | ✅ Correctly refused to substitute |
+| `patch`/`feature`/`minor`/`major` (legacy) | Should roll forward if exact missing | only `8.0.105` installed, declared `8.0.100` | ❌ **Pre-existing gap** (not from this PR): always treated as pinned-exact |
+
+Confirms the `latestMajor` finding against the literal doc wording, and surfaces one
+additional related gap (`latestMinor`'s hardcoded `minor=0`) plus one pre-existing,
+out-of-scope-for-this-PR gap (the four legacy non-`latest`-prefixed values). Verified
+identically against both our fork commit and the real PR author's branch, so none of
+the findings are artifacts of our own fork's extra commits.
+
 ## Outstanding / cleanup
 
 - Local repo (`~/Desktop/setup-dotnet`) is on branch `feature/check-latest-local-sdk-reuse`.
 - Fork branch `feature/check-latest-local-sdk-reuse` pushed to
-  `v-chiranjib-swain/setup-dotnet`.
-- Test workflows added to `v-chiranjib-swain/test-setup-dotnet` (`main`, 4 commits):
+  `v-chiranjib-swain/setup-dotnet`, including the (now-withdrawn-as-a-comment,
+  historical) `minimumVersion` guard fix and rebuilt `dist/`.
+- Test workflows added to `v-chiranjib-swain/test-setup-dotnet` (`main`):
   - `.github/workflows/check-latest-local-reuse-test.yml`
   - `.github/workflows/check-latest-edge-cases-test.yml`
+  - `.github/workflows/check-latest-latestmajor-fix-diff-test.yml`
+  - `.github/workflows/global-json-rollforward-matrix-test.yml`
+  - Repo secret `ACTIONS_STEP_DEBUG=true` set to enable debug-level log capture.
 - Decide whether to delete the branch/workflows now or keep them for future re-runs.
+
