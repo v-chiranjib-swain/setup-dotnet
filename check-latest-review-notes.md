@@ -73,6 +73,13 @@ The one remaining non-blocking comment:
 >  */
 > ```
 
+A third, minor item: everything else in the 9 changed files (`action.yml`,
+`README.md`, `installer.ts`, `setup-dotnet.ts`, `dist/setup/index.js`, both
+test files, the workflow) is legitimate and necessary. The only other thing
+worth flagging is `externals/install-dotnet.ps1`'s trailing-newline strip on
+an otherwise-untouched, signed vendor file — likely an editor artifact, worth
+reverting since it serves no functional purpose.
+
 ## Summary of the change
 
 Adds a `check-latest` input (default `true`, non-breaking) to `actions/setup-dotnet`.
@@ -291,8 +298,10 @@ Supported values are: true, false. The 'check-latest' option falls back to 'true
 Followed up on the withdrawn "guard `minimumVersion`" comment by checking `latestMajor`
 against the actual documented contract at
 https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward, then
-tested **all 9** official `rollForward` values live in one workflow
-(`.github/workflows/global-json-rollforward-matrix-test.yml` on `test-setup-dotnet`).
+tested **all 9** official `rollForward` values live in one workflow.
+
+**Test workflow (source, all 9 `rollForward` values):**
+https://github.com/v-chiranjib-swain/test-setup-dotnet/blob/main/.github/workflows/global-json-rollforward-matrix-test.yml
 
 **First run** (against our own fork's `efe6a36` commit — includes the withdrawn,
 now-historical `minimumVersion` guard fix):
