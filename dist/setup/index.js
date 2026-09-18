@@ -45418,6 +45418,9 @@ class DotnetCoreInstaller {
      * is only honored when the requested major tag is .NET 6 or higher. An
      * unknown major (bare 'latest', wildcards, LTS/STS) resolves to a supported
      * channel online, so quality applies there.
+     *
+     * For bare 'latest' without a channel, the major version is unknown locally.
+     * Default to true so preview/daily quality can be honored for local SDKs.
      */
     qualityApplies() {
         const source = this.version.toLowerCase() === 'latest'
@@ -106979,7 +106982,9 @@ function getVersionFromGlobalJson(globalJsonPath) {
                     version = `${major}.${minor}.${feature}xx`;
                     break;
             }
-            if (version !== globalJson.sdk.version) {
+            // 'latestMajor' clears 'version' to '', which never matches locally, so
+            // there's no local-reuse case for a floor to apply to.
+            if (version && version !== globalJson.sdk.version) {
                 minimumVersion = globalJson.sdk.version;
             }
         }
