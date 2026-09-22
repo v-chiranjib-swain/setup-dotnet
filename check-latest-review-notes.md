@@ -55,14 +55,25 @@ properly.
 > for an empty `version` with a `minimumVersion` present, picks the highest
 > installed SDK (any major) that's `>= minimumVersion`.
 
-The one remaining non-blocking comment:
+The one remaining non-blocking comment (revised after the latest commits, see
+"Follow-up: verifying the latest commits" below):
 
-> **Could we add a short comment explaining why `qualityApplies()` returns `true`
-> when the major version is unknown?**
+> **Could we add a short comment (and a small test) covering why `qualityApplies()`
+> returns `true` when the major version is unknown?**
 >
 > For `dotnet-version: latest` without `dotnet-channel`, the major version cannot be
 > determined locally. Returning `true` is intentional so that `preview`/`daily`
-> quality can still be honored when matching a locally installed SDK.
+> quality can still be honored when matching a locally installed SDK - verified live,
+> this is exactly what happens: a locally installed prerelease is correctly reused
+> over a numerically higher GA build when `dotnet-quality: preview` is set.
+>
+> This combination isn't covered by `__tests__/installer.test.ts` today - the closest
+> existing cases are `'latest'` with no channel and no quality, and `'8.0.x'`
+> (a known major) with `preview`. Worth a one-line addition mirroring the existing
+> `'reuses a prerelease SDK when quality is preview'` test, using `'latest'` with no
+> channel instead, so a future refactor of this branch (e.g. flipping the default to
+> `false`, which looks like the "safer" choice) gets caught by CI instead of silently
+> breaking this case.
 >
 > Something like:
 >
@@ -73,12 +84,53 @@ The one remaining non-blocking comment:
 >  */
 > ```
 
+**Resolution:** author added the unit test but declined the comment, citing a
+team convention of keeping the codebase mostly comment-free. Acceptable — the
+test is the part that provides the actual safety net (fails CI if the `true`
+fallback is ever changed), the comment was only supplementary documentation.
+Confirmed pushed as commit `b2658b49` (13th commit): a `jest-each` test over
+`['preview', 'daily']` for `dotnet-version: latest` with no `dotnet-channel`,
+asserting the highest local prerelease (`9.0.100-preview.2`, over both a GA
+`8.0.412` and a lower prerelease) is reused — exactly the gap raised. Only
+`__tests__/installer.test.ts` changed, no `src/` behavior change, so no fresh
+live e2e run is needed; the behavior itself was already verified live in
+`bare-latest-quality-applies-test.yml`. This closes out the last open item.
+
 A third, minor item: everything else in the 9 changed files (`action.yml`,
 `README.md`, `installer.ts`, `setup-dotnet.ts`, `dist/setup/index.js`, both
 test files, the workflow) is legitimate and necessary. The only other thing
 worth flagging is `externals/install-dotnet.ps1`'s trailing-newline strip on
 an otherwise-untouched, signed vendor file — likely an editor artifact, worth
 reverting since it serves no functional purpose.
+
+## Follow-up: verifying the latest commits
+
+The author pushed 3 more commits after the ones reviewed above (`46af747`,
+`432f9ac`, `be40b43` — current head). Verified live against `be40b43`
+(https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35694027691,
+https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35703831425,
+https://github.com/v-chiranjib-swain/test-setup-dotnet/actions/runs/35705555912):
+
+- **`latestMajor`/`latestMinor` gap (the "Deeper finding" above): fixed.** A
+  higher major/minor SDK satisfying the declared floor is now reused locally,
+  matching the official docs.
+- **`install-dotnet.ps1` trailing-newline: fixed** (9 changed files → 8).
+- **Beyond what was asked:** `findLocalSdkVersion()` was rewritten to also
+  roll forward the legacy (non-`latest*`) `patch`/`feature`/`minor`/`major`
+  values to the nearest higher band locally — previously exact-pin-only.
+  `qualityApplies()` also gained a new branch: `dotnet-quality` is now
+  correctly ignored for a full `A.B.C` `sdk.version` combined with a
+  rollForward policy (matches the online resolver, which never honors
+  quality for an exact version) — verified live: a prerelease-only fixture is
+  rejected, and a GA candidate is preferred over a prerelease one even when
+  `dotnet-quality: preview` is set.
+- **Our qualityApplies() comment ask: not addressed.** The bare
+  `dotnet-version: latest` + no `dotnet-channel` branch (`return major ? ... :
+  true`) is untouched. Verified live it still works as intended (a locally
+  installed prerelease is reused over a numerically higher GA build when
+  `dotnet-quality: preview` is set), and confirmed this exact combination has
+  no unit test in `__tests__/installer.test.ts` — see the revised comment
+  above, now asking for a test in addition to the comment.
 
 ## Summary of the change
 
