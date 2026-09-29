@@ -86,6 +86,21 @@ steps:
     dotnet-channel: LTS
 ```
 
+## Using the `skip-lts-prepass` input
+
+By default, `setup-dotnet` installs a minimal LTS runtime before installing the requested `dotnet-version`, to guarantee a stable `dotnet` executable is available. If your workflow doesn't need this safeguard (for example, the runner image already has a `dotnet` executable, or you're on a clean self-hosted/container environment and want to avoid the extra download), set `skip-lts-prepass: true` to install only the requested version.
+
+```yaml
+steps:
+- uses: actions/checkout@v7
+- uses: actions/setup-dotnet@v6
+  with:
+    dotnet-version: '9.0.x'
+    skip-lts-prepass: true
+```
+
+> **Note**: Skipping the pre-pass means the active `Host: Version` reported by `dotnet --info` will reflect the requested version's runtime instead of the latest LTS.
+
 ## Using the `architecture` input
 Using the architecture input, it is possible to specify the required .NET SDK architecture. Possible values:  `x64`, `x86`, `arm64`, `amd64`, `arm`, `s390x`, `ppc64le`, `riscv64`. If the input is not specified, the architecture defaults to the host OS architecture (not all of the architectures are available on all platforms).
 
