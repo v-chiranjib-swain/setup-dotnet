@@ -722,7 +722,7 @@ export class DotnetCoreInstaller {
     /**
      * Install dotnet runtime first in order to get
      * the latest stable version of dotnet CLI.
-     * Opt-out via skip-lts-prepass when this safeguard isn't needed (issue 642).
+     * Opt-out via skip-lts-prepass when this safeguard isn't needed.
      */
     if (!this.skipLtsPrepass) {
       const runtimeInstallOutput = await new DotnetInstallScript()
