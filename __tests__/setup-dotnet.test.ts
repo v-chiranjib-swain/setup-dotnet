@@ -334,6 +334,25 @@ describe('setup-dotnet tests', () => {
       expect(capturedSkipLtsPrepass).toBe(true);
     });
 
+    it("should default 'skip-lts-prepass' to false when the input isn't set", async () => {
+      inputs['dotnet-version'] = ['10.0.101'];
+      inputs['dotnet-quality'] = '';
+      inputs['architecture'] = '';
+      inputs['skip-lts-prepass'] = '';
+
+      let capturedSkipLtsPrepass: boolean | undefined;
+      installDotnetSpy.mockImplementation(function (this: any) {
+        capturedSkipLtsPrepass = this.skipLtsPrepass;
+        return Promise.resolve('');
+      });
+
+      await setup.run();
+
+      expect(getBooleanInputSpy).toHaveBeenCalledWith('skip-lts-prepass');
+      expect(installDotnetSpy).toHaveBeenCalledTimes(1);
+      expect(capturedSkipLtsPrepass).toBe(false);
+    });
+
     describe("'check-latest' resolution", () => {
       const captureCheckLatest = async () => {
         inputs['dotnet-version'] = ['10.0.101'];

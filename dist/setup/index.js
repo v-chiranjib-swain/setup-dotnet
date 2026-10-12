@@ -45618,6 +45618,9 @@ class DotnetCoreInstaller {
                 warning(`Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`);
             }
         }
+        else {
+            info('Skipping LTS runtime pre-pass (skip-lts-prepass: true).');
+        }
         /**
          * Install dotnet over the latest version of
          * dotnet CLI

@@ -747,6 +747,8 @@ export class DotnetCoreInstaller {
           `Failed to install dotnet runtime + cli, exit code: ${runtimeInstallOutput.exitCode}. ${runtimeInstallOutput.stderr}`
         );
       }
+    } else {
+      core.info('Skipping LTS runtime pre-pass (skip-lts-prepass: true).');
     }
 
     /**

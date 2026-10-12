@@ -99,7 +99,7 @@ steps:
     skip-lts-prepass: true
 ```
 
-> **Note**: Skipping the pre-pass means the active `Host: Version` reported by `dotnet --info` will reflect the requested version's runtime instead of the latest LTS.
+> **Note**: Setting skip-lts-prepass: true skips the LTS runtime pre-pass, so the action won't proactively install the latest LTS runtime. The existing dotnet executable and host components will be used if present; on a clean machine, they will come from the requested SDK installation. Consequently, dotnet --info may report a different Host: Version than when the pre-pass runs.
 
 ## Using the `architecture` input
 Using the architecture input, it is possible to specify the required .NET SDK architecture. Possible values:  `x64`, `x86`, `arm64`, `amd64`, `arm`, `s390x`, `ppc64le`, `riscv64`. If the input is not specified, the architecture defaults to the host OS architecture (not all of the architectures are available on all platforms).
