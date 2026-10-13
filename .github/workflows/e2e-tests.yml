@@ -771,53 +771,22 @@ jobs:
           __tests__/verify-dotnet.ps1 -Patterns "^9\.0\.100$"
 
   test-skip-lts-prepass:
-    runs-on: ubuntu-latest
-    container: ubuntu:24.04
-    env:
-      REQUESTED_VERSION: 9.0.x
+    runs-on: ${{ matrix.operating-system }}
+    strategy:
+      fail-fast: false
+      matrix:
+        operating-system: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install container prerequisites
-        run: apt-get update -qq && apt-get install -y -qq curl tar ca-certificates libicu-dev
-
-      - name: Confirm zero .NET in fresh container
-        run: |
-          if command -v dotnet >/dev/null 2>&1; then
-            echo "Unexpected dotnet executable found"
-            exit 1
-          fi
-
-          echo "No dotnet executable found — clean slate confirmed"
-
-      - name: Setup dotnet with skip-lts-prepass
+      - name: Clear toolcache
+        shell: pwsh
+        run: __tests__/clear-toolcache.ps1 ${{ runner.os }}
+      - name: Setup dotnet 9.0.308 with skip-lts-prepass
         uses: ./
         with:
-          dotnet-version: ${{ env.REQUESTED_VERSION }}
+          dotnet-version: 9.0.308
           skip-lts-prepass: true
-
-      - name: Verify requested SDK and runtimes
-        run: |
-          set -e
-
-          sdk_version="$(dotnet --version)"
-          echo "Installed SDK: $sdk_version"
-
-          requested_major="${REQUESTED_VERSION%%.*}"
-          if [[ "$sdk_version" != "$requested_major".* ]]; then
-            echo "Unexpected SDK version: $sdk_version"
-            exit 1
-          fi
-
-          runtimes="$(dotnet --list-runtimes)"
-          echo "$runtimes"
-
-          unexpected="$(echo "$runtimes" | grep -vE "App ${requested_major}\." || true)"
-          if [ -n "$unexpected" ]; then
-            echo "Unexpected runtime(s) found:"
-            echo "$unexpected"
-            exit 1
-          fi
-
-          echo "Requested SDK and runtimes verified successfully."
+      - name: Verify dotnet
+        shell: pwsh
+        run: __tests__/verify-dotnet.ps1 -Patterns "^9\.0\.308$"
